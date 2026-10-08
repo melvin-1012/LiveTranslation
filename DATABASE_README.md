@@ -9,7 +9,8 @@ supabase/
 ├── config.toml
 └── migrations/
     ├── 001_initial_translation_schema.sql
-    └── 002_seed_data.sql
+    ├── 002_seed_data.sql
+    └── 003_profile_language_preferences.sql
 DATABASE_README.md
 ```
 
@@ -17,6 +18,7 @@ DATABASE_README.md
 
 The core architecture supports real-time translation pipelines involving live microphone input and progressively translated output. 
 - **`profiles`**: System users, linked to Supabase Auth (`auth.users`).
+- **Profile language preferences**: Optional preferred source and target languages reference `supported_languages`; deleting a language clears the preference.
 - **`supported_languages`**: Master table for languages (English, Tamil, Hindi, Telugu, Kannada, Malayalam).
 - **`translation_sessions`**: Represents one live streaming translation session. Has status and mode.
 - **`session_participants`**: Users/Roles within a session (Speaker/Listener).
@@ -33,6 +35,7 @@ The core architecture supports real-time translation pipelines involving live mi
 
 ## Relationships Overview
 
+- A profile's optional preferred source and target language IDs reference `supported_languages`.
 - A **Translation Session** has many **Participants** and many **Utterances**.
 - An **Utterance** has an **ASR Result** and many **Translation Results** (multiple versions/partials, and one final).
 - A **Translation Result** has one **Translation Metrics** tracking its latencies and caption rewrites.
