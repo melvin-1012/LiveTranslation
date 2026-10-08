@@ -50,104 +50,143 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
-    # Default to Hindi, but this variable can now be updated dynamically!
+    # Default states
     current_target_lang = "hi" 
+    current_source_lang = "en"
     
-    dg_url = "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&language=en"
-    headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-    
-    try:
-        async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
-            
-            async def sender():
-                nonlocal current_target_lang # Allow this function to modify the language variable
-                try:
-                    while True:
-                        # Receive a generic message from frontend (could be text or bytes)
-                        message = await websocket.receive()
-                        
-                        # 1. If it's a TEXT message, it's a configuration update or text-to-text translation
-                        if "text" in message and message["text"]:
-                            try:
-                                data = json.loads(message["text"])
-                                if "language" in data:
-                                    current_target_lang = data["language"]
-                                    print(f"🔄 Language dynamically switched to: {current_target_lang}")
-                                
-                                if "text_to_translate" in data:
-                                    # Handle manual text-to-text translation
-                                    txt = data["text_to_translate"]
-                                    print(f"📝 Text-to-Text Request: {txt}")
-                                    translated = await translate_text(txt, current_target_lang)
-                                    payload = {
-                                        "status": "success",
-                                        "original_text": txt,
-                                        "translated_text": translated,
-                                        "target_language": current_target_lang,
-                                        "is_final": True,
-                                        "is_text_to_text": True
-                                    }
-                                    await websocket.send_text(json.dumps(payload))
-                            except json.JSONDecodeError:
-                                pass
-                                
-                        # 2. If it's a BYTES message, it's audio, forward to Deepgram
-                        elif "bytes" in message and message["bytes"]:
-                            await deepgram_ws.send(message["bytes"])
+    # Use a Queue to buffer frontend audio/text while Deepgram is reconnecting
+    message_queue = asyncio.Queue()
+
+    # 1. Task to read from frontend and put into Queue
+    async def frontend_receiver():
+        nonlocal current_target_lang, current_source_lang
+        try:
+            while True:
+                message = await websocket.receive()
+                
+                if "text" in message and message["text"]:
+                    try:
+                        data = json.loads(message["text"])
+                        if "language" in data:
+                            current_target_lang = data["language"]
+                            print(f"🔄 Target switched to: {current_target_lang}")
                             
-                except WebSocketDisconnect:
-                    print("Frontend client disconnected.")
-                except Exception as e:
-                    print(f"Sender Error: {e}")
-                finally:
-                    await deepgram_ws.send(b'')
-
-            async def receiver():
-                try:
-                    while True:
-                        response_str = await deepgram_ws.recv()
-                        response_json = json.loads(response_str)
-                        
-                        is_final = response_json.get("is_final")
-                        alternatives = response_json.get("channel", {}).get("alternatives", [])
-                        
-                        if alternatives:
-                            transcript = alternatives[0].get("transcript", "")
+                        if "source_language" in data:
+                            current_source_lang = data["source_language"]
+                            print(f"🔄 Source switched to: {current_source_lang}")
+                            # Send a control message to the queue to trigger reconnect
+                            await message_queue.put({"type": "reconnect"})
                             
-                            if transcript and is_final:
-                                print(f"Final Transcript: {transcript}")
-                                # Pass the dynamically updated language to the translation function
-                                translated = await translate_text(transcript, current_target_lang)
-                                print(f"Translated ({current_target_lang}): {translated}")
-                                
-                                payload = {
-                                    "status": "success",
-                                    "original_text": transcript,
-                                    "translated_text": translated,
-                                    "target_language": current_target_lang,
-                                    "is_final": True
-                                }
-                                await websocket.send_text(json.dumps(payload))
-                                
-                            elif transcript:
-                                payload = {
-                                    "status": "success",
-                                    "original_text": transcript,
-                                    "translated_text": "...", 
-                                    "target_language": current_target_lang,
-                                    "is_final": False
-                                }
-                                await websocket.send_text(json.dumps(payload))
+                        if "text_to_translate" in data:
+                            txt = data["text_to_translate"]
+                            print(f"📝 Text-to-Text Request: {txt}")
+                            translated = await translate_text(txt, current_target_lang)
+                            payload = {
+                                "status": "success",
+                                "original_text": txt,
+                                "translated_text": translated,
+                                "target_language": current_target_lang,
+                                "is_final": True,
+                                "is_text_to_text": True
+                            }
+                            await websocket.send_text(json.dumps(payload))
+                    except json.JSONDecodeError:
+                        pass
+                        
+                elif "bytes" in message and message["bytes"]:
+                    await message_queue.put({"type": "audio", "data": message["bytes"]})
+                    
+        except WebSocketDisconnect:
+            print("Frontend client disconnected.")
+            await message_queue.put({"type": "disconnect"})
 
-                except ws_client.exceptions.ConnectionClosed:
-                    print("Deepgram connection closed.")
-                except Exception as e:
-                    print(f"Receiver Error: {e}")
-
-            await asyncio.gather(sender(), receiver())
+    # 2. Task to handle Deepgram connection
+    async def deepgram_handler():
+        headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+        
+        while True:
+            # Note: added model=nova-2 for better multilingual support
+            dg_url = f"wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&language={current_source_lang}"
             
-    except Exception as e:
-        print(f"Deepgram connection failed: {e}")
+            try:
+                async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
+                    
+                    async def sender():
+                        while True:
+                            msg = await message_queue.get()
+                            if msg["type"] == "disconnect":
+                                raise asyncio.CancelledError()
+                            elif msg["type"] == "reconnect":
+                                return "reconnect"
+                            elif msg["type"] == "audio":
+                                await deepgram_ws.send(msg["data"])
+
+                    async def receiver():
+                        try:
+                            while True:
+                                response_str = await deepgram_ws.recv()
+                                response_json = json.loads(response_str)
+                                
+                                is_final = response_json.get("is_final")
+                                alternatives = response_json.get("channel", {}).get("alternatives", [])
+                                
+                                if alternatives:
+                                    transcript = alternatives[0].get("transcript", "")
+                                    
+                                    if transcript and is_final:
+                                        print(f"Final Transcript ({current_source_lang}): {transcript}")
+                                        translated = await translate_text(transcript, current_target_lang)
+                                        print(f"Translated ({current_target_lang}): {translated}")
+                                        
+                                        payload = {
+                                            "status": "success",
+                                            "original_text": transcript,
+                                            "translated_text": translated,
+                                            "target_language": current_target_lang,
+                                            "is_final": True
+                                        }
+                                        await websocket.send_text(json.dumps(payload))
+                                        
+                                    elif transcript:
+                                        payload = {
+                                            "status": "success",
+                                            "original_text": transcript,
+                                            "translated_text": "...", 
+                                            "target_language": current_target_lang,
+                                            "is_final": False
+                                        }
+                                        await websocket.send_text(json.dumps(payload))
+                        except ws_client.exceptions.ConnectionClosed:
+                            print("Deepgram connection closed.")
+
+                    sender_task = asyncio.create_task(sender())
+                    receiver_task = asyncio.create_task(receiver())
+                    
+                    done, pending = await asyncio.wait(
+                        [sender_task, receiver_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    for task in pending:
+                        task.cancel()
+                    
+                    if sender_task in done:
+                        try:
+                            result = sender_task.result()
+                            if result == "reconnect":
+                                print("Reconnecting to Deepgram to switch listening language...")
+                                await deepgram_ws.send(b'')
+                                continue 
+                        except asyncio.CancelledError:
+                            break 
+                            
+                    break 
+                    
+            except Exception as e:
+                print(f"Deepgram connection failed: {e}")
+                break 
+                
+    await asyncio.gather(frontend_receiver(), deepgram_handler())
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

@@ -157,9 +157,31 @@ document.addEventListener('DOMContentLoaded', () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 const targetLang = languageCodes[targetLanguageSelect.value] || 'hi';
                 ws.send(JSON.stringify({ language: targetLang }));
-                console.log(`Sent language switch request: ${targetLang}`);
+                console.log(`Sent target switch: ${targetLang}`);
             }
         });
+
+        sourceLanguageSelect.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const sourceLang = languageCodes[sourceLanguageSelect.value] || 'en';
+                ws.send(JSON.stringify({ source_language: sourceLang }));
+                console.log(`Sent source switch: ${sourceLang}`);
+            }
+        });
+        
+        const swapBtn = document.getElementById('swapLanguagesBtn');
+        if (swapBtn) {
+            swapBtn.addEventListener('click', () => {
+                setTimeout(() => { 
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        const targetLang = languageCodes[targetLanguageSelect.value] || 'hi';
+                        const sourceLang = languageCodes[sourceLanguageSelect.value] || 'en';
+                        ws.send(JSON.stringify({ language: targetLang, source_language: sourceLang }));
+                        console.log(`Sent swap: ${sourceLang} -> ${targetLang}`);
+                    }
+                }, 100); // 100ms delay to allow app.js to update the DOM select values first
+            });
+        }
         
         // ✍️ Text-to-Text translation (Debounced)
         let typingTimer;
