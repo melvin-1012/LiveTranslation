@@ -28,18 +28,21 @@ class TranslationService(ABC):
     async def translate_final(self, text: str, source_lang: str, target_lang: str, glossary: dict = None) -> dict: pass
 
 class MockASRService(ASRService):
+    def __init__(self):
+        self.chunk_count = 0
     async def start_stream(self, config: dict): pass
     async def process_audio_chunk(self, chunk: bytes) -> Optional[dict]:
-        return {"type": "asr_partial", "text": "mock partial", "is_final": False}
+        self.chunk_count += 1
+        return {"type": "asr_partial", "text": f"mock partial {self.chunk_count}", "is_final": False}
     async def finalize(self) -> Optional[dict]:
         return {"type": "asr_final", "text": "mock final", "is_final": True}
     async def close(self): pass
 
 class MockTranslationService(TranslationService):
     async def translate_partial(self, text: str, source_lang: str, target_lang: str, glossary: dict = None) -> dict:
-        return {"translated_text": "mock translated partial", "confidence": 0.9}
+        return {"translated_text": f"mock translated partial for {text}", "confidence": 0.9}
     async def translate_final(self, text: str, source_lang: str, target_lang: str, glossary: dict = None) -> dict:
-        return {"translated_text": "mock translated final", "confidence": 0.95}
+        return {"translated_text": f"mock translated final for {text}", "confidence": 0.95}
 
 class StreamingOrchestrator:
     def __init__(self, asr: ASRService, translator: TranslationService, websocket):
@@ -55,6 +58,7 @@ class StreamingOrchestrator:
         self.target_lang = None
         self.session_id = None
         self.token = None
+        self.last_asr_text = ""
 
     async def transition_state(self, new_state: StreamingState):
         if not is_valid_transition(self.state, new_state):
@@ -67,7 +71,6 @@ class StreamingOrchestrator:
         self.session_id = config.get("session_id")
         self.token = config.get("token")
         
-        # We block briefly to create the utterance synchronously so we have an ID for the live stream
         try:
             db = get_supabase_client(self.token)
             res = create_utterance(db, self.session_id, self.sequence_number)
@@ -92,6 +95,13 @@ class StreamingOrchestrator:
             await self._handle_asr_result(asr_result)
         await self.asr.close()
 
+    def _is_stable_partial(self, new_text: str) -> bool:
+        # Task 8: Partial Translation Strategy
+        # Only translate if text length is significantly larger than previous or has boundary
+        if len(new_text.split()) >= len(self.last_asr_text.split()) + 2:
+            return True
+        return False
+
     async def _handle_asr_result(self, asr_result: dict):
         is_final = asr_result.get("is_final", False)
         text = asr_result.get("text", "")
@@ -99,9 +109,13 @@ class StreamingOrchestrator:
         
         if is_final:
             await self.transition_state(StreamingState.ASR_FINAL)
-            # Store final ASR result asynchronously without blocking
-            # Assuming store_asr_result in queue
-            pass
+            # Store final ASR result
+            await persistence_queue.enqueue("store_asr_result", self.token, {
+                "utterance_id": self.utterance_id,
+                "model_name": "sarvam_asr",
+                "transcript": text,
+                "is_final": True
+            })
         else:
             if self.state == StreamingState.UTTERANCE_STARTED:
                 await self.transition_state(StreamingState.ASR_PARTIAL)
@@ -114,6 +128,12 @@ class StreamingOrchestrator:
             "text": text,
             "sequence_number": self.sequence_number
         })
+
+        # Partial translation strategy check
+        if not is_final and not self._is_stable_partial(text):
+            return
+
+        self.last_asr_text = text
 
         if is_final:
             trans_res = await self.translator.translate_final(text, self.source_lang, self.target_lang)
@@ -142,8 +162,10 @@ class StreamingOrchestrator:
         if is_final:
             metrics_data = self.metrics.calculate_metrics()
             
+        # Ensure only the final result has is_final = true
         await persistence_queue.enqueue("store_translation_result", self.token, {
             "utterance_id": self.utterance_id,
+            "model_name": trans_res.get("provider", "sarvam_translation"),
             "translated_text": trans_res["translated_text"],
             "version_number": self.translation_version,
             "is_final": is_final,
@@ -157,3 +179,11 @@ class StreamingOrchestrator:
         self.metrics.mark_output()
         if hasattr(self.websocket, 'send_json'):
             await self.websocket.send_json(payload)
+
+def get_provider_factory():
+    from app.core.config import settings
+    if settings.TRANSLATION_PROVIDER == "sarvam":
+        from app.services.providers.sarvam import SarvamASRService, SarvamTranslationService
+        return SarvamASRService(), SarvamTranslationService()
+    else:
+        return MockASRService(), MockTranslationService()

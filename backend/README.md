@@ -1,78 +1,64 @@
 # HACKNEX 2026 EPS03 - Live Translation Backend
 
-This is the FastAPI backend for the Live Translation project. It integrates seamlessly with Supabase for persistent storage, authentication, and live tracking.
+This is the FastAPI backend for the Live Translation project. It integrates seamlessly with Supabase for persistent storage, authentication, and live tracking, as well as AI providers for live translation.
 
-## Architecture & Persistence
+## AI Provider Configuration (Sector 3)
 
-The backend acts as an orchestrator and gateway between the user's audio input, the AI translation pipeline, and the Supabase PostgreSQL database.
+The pipeline is integrated with **Sarvam AI** as the primary Real-time ASR and Translation provider.
 
-**Live Pipeline Flow:**
-`Audio Chunk -> ASR -> State Machine -> Translation -> WebSocket Emit -> Persistence Queue -> Supabase`
+### Setup and Switching Providers
+Providers are decoupled via a factory mechanism (`get_provider_factory` in `ws.py`). You can toggle between `mock` and `sarvam`.
 
-The architecture guarantees that database writes do NOT block the WebSocket streaming connection. All DB inserts are enqueued in a `PersistenceQueue` handled by an async background worker. If Supabase goes down, the background worker logs the error, but the live audio and translation streams will continue without interruption.
-
-## Supabase & Local Setup
-
-### 1. Start Local Supabase
-Install Docker Desktop and the Supabase CLI, then run:
-```bash
-npx supabase start
-```
-This boots the local Postgres, PostgREST API, Auth, and Storage services. 
-
-### 2. Environment Variables
-Create a `.env` file in the `backend/` directory. You can obtain these keys by running `npx supabase status`.
-
+In your `backend/.env`:
 ```env
-SUPABASE_URL=http://127.0.0.1:54321
-SUPABASE_ANON_KEY=<your-anon-key>
-SUPABASE_KEY=<your-service-role-key> # Used strictly for admin bypassing/testing
+TRANSLATION_PROVIDER=sarvam
+SARVAM_API_KEY=your-sarvam-key-here
 ```
-*Note: Never commit your actual `.env` file or expose your `SUPABASE_KEY` to the frontend.*
+If you set `TRANSLATION_PROVIDER=mock`, the system will use a local test harness that mimics AI responses, which is completely free and requires no internet/keys.
 
-### 3. Start FastAPI
-```bash
-cd backend
-python -m uvicorn app.main:app --reload
-```
+### Language Mapping
+The application internally uses standard ISO codes (`en`, `hi`, `ta`, `te`, `kn`, `ml`).
+The backend automatically maps these to Sarvam's specific BCP-47 codes:
+- `en` → `en-IN`
+- `hi` → `hi-IN`
+- `ta` → `ta-IN`
+- `te` → `te-IN`
+- `kn` → `kn-IN`
+- `ml` → `ml-IN`
 
-## Authentication & RLS Behavior
+### ASR Architecture & Audio Format
+The backend uses Python's `websockets` package to establish a dedicated, asynchronous streaming connection to `wss://api.sarvam.ai/speech-to-text`.
+- **Audio Format:** The provider generally expects raw PCM or WAV data (16kHz). The frontend is responsible for transmitting the correct bytes over the WebSocket.
+- The `SarvamASRService` drains an asyncio queue for partial/final results, mapping language detections (Mode A vs Mode B auto-detection) back to the internal application format.
 
-The backend adheres strictly to Supabase's Row Level Security (RLS). 
-- All protected REST endpoints require a standard `Authorization: Bearer <access_token>` header.
-- The `get_current_user` FastAPI dependency extracts this token and calls the Supabase Auth API to securely verify the user identity.
-- We do NOT trust the frontend to provide `user_id` in JSON bodies.
-- Instead of using the `service_role` key to write user data, the backend dynamically instantiates a user-bound `Client` and injects the Bearer token into PostgREST. This ensures that every insert/select query respects the PostgreSQL RLS policies defined in the `translation_sessions` and `glossary_terms` tables.
+### Translation Architecture
+The backend uses `httpx.AsyncClient` to asynchronously call Sarvam's `https://api.sarvam.ai/translate` endpoint for text translation. 
+It cleanly supports Indic to Indic, English to Indic, and Indic to English, with explicit code-mixing flags enabled where structurally appropriate.
 
-## REST Endpoints
+### Partial Translation & Versioning Strategy
+To avoid overloading the Translation API and to reduce flashing for users, the `StreamingOrchestrator` distinguishes between "Unstable" and "Stable" ASR partials. 
+- The Translation API is **ONLY** called if the partial string has grown by at least two words, or a boundary is detected.
+- **Versioning:** 
+  - Version 1: First stable partial translation
+  - Version 2: Updated partial translation
+  - Version X: Final translation (`is_final = True`)
+- Only the final translation sets `is_final: True` in the PostgreSQL database.
 
-- `POST /sessions` - Create a new session.
-- `GET /sessions` - Get all sessions belonging to the authenticated user.
-- `GET /sessions/{id}` - Get session details (restricted by RLS).
-- `PATCH /sessions/{id}/end` - Mark a session as completed.
-- `POST /sessions/{id}/utterances` - Create an utterance container.
-- `GET /glossary` - Fetch glossary terms restricted to the user and global languages.
+### Latency Metrics
+The `TranslationMetricsTracker` records monotonic timestamps across the pipeline:
+- `audio_received_at`
+- `asr_first_at`
+- `translation_first_at`
+- `translation_final_at`
+- `output_at`
+These metrics calculate exactly how much latency is introduced by ASR vs Translation, persisting directly to Supabase asynchronously.
 
-## WebSocket Endpoint
+### Real Provider Smoke Test
+To test the real Sarvam connection without running the full frontend:
+1. Obtain a valid `SARVAM_API_KEY` and set `TRANSLATION_PROVIDER=sarvam` in `.env`.
+2. Connect a tool like `wscat` or Postman to `ws://localhost:8000/ws/translate`.
+3. Send the config JSON: `{"session_id": "<uuid>", "source_language": "en", "target_language": "ta", "token": "<supabase-jwt>"}`.
+4. Send raw audio bytes and observe the translation payloads.
 
-- `ws://localhost:8000/ws/translate` - Streams binary audio chunks.
-  - The first message must be a JSON config containing: `{"session_id": "...", "source_language": "en", "target_language": "hi", "token": "..."}`.
-  - Subsequent messages can be binary audio bytes.
-  - The WebSocket emits structured JSON payloads representing state machine transitions (`asr_partial`, `translation_final`, etc.).
-
-## Testing
-
-The testing suite uses `pytest` and is divided into unit tests (mocked dependencies) and integration tests (hitting the live local Supabase DB).
-
-### Run Unit Tests
-```bash
-export PYTHONPATH="." # (Linux/Mac)
-$env:PYTHONPATH="."   # (Windows)
-pytest tests/test_streaming.py -v
-```
-
-### Run Integration Tests
-Integration tests require local Supabase to be running (`npx supabase start`).
-```bash
-pytest tests/test_integration.py -v -s
-```
+## Persistence Architecture & REST Endpoints
+*(See previous documentation regarding Supabase integration, `PersistenceQueue`, and RLS).*
