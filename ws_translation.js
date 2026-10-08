@@ -260,5 +260,54 @@ document.addEventListener('DOMContentLoaded', () => {
             void startListening();
         });
         newStopBtn.addEventListener('click', stopListening);
+
+        sourceLanguageSelect.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const srcCode = languageCodes[sourceLanguageSelect.value] || 'en';
+                ws.send(JSON.stringify({ source_language: srcCode }));
+            }
+        });
+
+        targetLanguageSelect.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
+                ws.send(JSON.stringify({ target_language: tgtCode }));
+            }
+        });
+
+        // Debounced Text-to-Text translation when not speaking
+        let typingTimer = null;
+        sourceTranscript.addEventListener('input', () => {
+            if (newStartBtn.disabled) return;
+            clearTimeout(typingTimer);
+            const text = sourceTranscript.value.trim();
+            if (!text) {
+                targetTranslation.value = '';
+                return;
+            }
+            typingTimer = setTimeout(() => {
+                const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const tempWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
+                tempWs.onopen = () => {
+                    const srcCode = languageCodes[sourceLanguageSelect.value] || 'en';
+                    const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
+                    tempWs.send(JSON.stringify({
+                        source_language: srcCode,
+                        target_language: tgtCode,
+                        text_to_translate: text
+                    }));
+                };
+                tempWs.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.translated_text || data.text) {
+                            targetTranslation.value = data.translated_text || data.text;
+                            targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    } catch {}
+                    tempWs.close();
+                };
+            }, 600);
+        });
     }, 500);
 });

@@ -1,6 +1,18 @@
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Load .env from backend directory or project root
+backend_dir = Path(__file__).resolve().parent.parent.parent
+backend_env = backend_dir / ".env"
+root_env = backend_dir.parent / ".env"
+
+if backend_env.exists():
+    load_dotenv(backend_env)
+if root_env.exists():
+    load_dotenv(root_env)
 
 class Settings(BaseSettings):
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
@@ -15,6 +27,6 @@ class Settings(BaseSettings):
     TTS_API_KEY: str = os.getenv("TTS_API_KEY", "")
 
     class Config:
-        env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()

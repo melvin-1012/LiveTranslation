@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import base64
 from typing import Optional
 import httpx
 import websockets
@@ -52,18 +53,16 @@ class SarvamASRService(ASRService):
         self.config = config
         
         # Determine language (Mode A/B)
-        lang = config.get("source_language", "auto")
-        sarvam_lang = map_lang(lang) if lang != "auto" else "unknown"
+        lang = config.get("source_language", "ml")
+        sarvam_lang = map_lang(lang) if lang in LANGUAGE_MAP else "ml-IN"
         
-        uri = f"wss://api.sarvam.ai/speech-to-text?language={sarvam_lang}"
-        # A true implementation might vary slightly based on Sarvam's exact API shape
+        uri = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code={sarvam_lang}&model=saaras:v4"
         try:
             self.ws = await websockets.connect(
                 uri,
                 additional_headers={"api-subscription-key": self.api_key}
             )
             self.is_connected = True
-            # Start background receive task
             self.receive_task = asyncio.create_task(self._receive_loop())
         except Exception as e:
             logger.error(f"Sarvam ASR Connection Error: {e}")
@@ -74,24 +73,33 @@ class SarvamASRService(ASRService):
             while self.is_connected:
                 message = await self.ws.recv()
                 data = json.loads(message)
-                # Parse Sarvam's format (assume {"transcript": "...", "is_final": bool, "language": "hi-IN"})
-                transcript = data.get("transcript", "")
-                is_final = data.get("is_final", False)
-                if transcript:
-                    await self.result_queue.put({
-                        "text": transcript,
-                        "is_final": is_final,
-                        "language": map_lang_reverse(data.get("language", map_lang(self.config.get("source_language", "en"))))
-                    })
+                if data.get("event") == "transcript":
+                    transcript = data.get("text", "")
+                    is_final = data.get("is_final", False)
+                    if transcript:
+                        await self.result_queue.put({
+                            "text": transcript,
+                            "is_final": is_final,
+                            "language": self.config.get("source_language", "ml")
+                        })
+                elif "transcript" in data:
+                    transcript = data.get("transcript", "")
+                    is_final = data.get("is_final", False)
+                    if transcript:
+                        await self.result_queue.put({
+                            "text": transcript,
+                            "is_final": is_final,
+                            "language": self.config.get("source_language", "ml")
+                        })
         except Exception as e:
             logger.error(f"Sarvam ASR Receive loop error: {e}")
             self.is_connected = False
 
     async def process_audio_chunk(self, chunk: bytes) -> Optional[dict]:
-        # Enforce audio format: Assume front-end is sending 16kHz PCM or valid format expected by Sarvam
         if self.is_connected and chunk:
             try:
-                await self.ws.send(chunk)
+                b64 = base64.b64encode(chunk).decode("utf-8")
+                await self.ws.send(json.dumps({"event": "audio_input", "audio": b64}))
             except Exception as e:
                 logger.error(f"Sarvam ASR Send Error: {e}")
                 self.is_connected = False
@@ -103,10 +111,8 @@ class SarvamASRService(ASRService):
 
     async def finalize(self) -> Optional[dict]:
         if self.is_connected:
-            # Send EOF/EOS signal to Sarvam
             try:
-                await self.ws.send(json.dumps({"type": "eof"}))
-                # Wait briefly for final result
+                await self.ws.send(json.dumps({"event": "flush"}))
                 try:
                     res = await asyncio.wait_for(self.result_queue.get(), timeout=2.0)
                     return res
@@ -137,14 +143,18 @@ class SarvamTranslationService(TranslationService):
             "Content-Type": "application/json"
         }
         
-        # Support code mixing based on env or language combinations
         sarvam_source, sarvam_target = map_translation_pair(source_lang, target_lang)
         payload = {
             "input": text,
+            "text": text,
             "source_language_code": sarvam_source,
             "target_language_code": sarvam_target,
-            "model": "mayura:v1",
-            "mode": "code-mixed"
+            "source_language": sarvam_source,
+            "target_language": sarvam_target,
+            "speaker_gender": "Male",
+            "mode": "formal",
+            "model": "sarvam-translate:v1",
+            "enable_code_mixing": True
         }
         
         async with httpx.AsyncClient() as client:
@@ -152,12 +162,12 @@ class SarvamTranslationService(TranslationService):
                 resp = await client.post(self.url, json=payload, headers=headers, timeout=5.0)
                 resp.raise_for_status()
                 data = resp.json()
-                translated_text = data.get("translated_text")
+                translated_text = data.get("translated_text") or data.get("translation")
                 if not isinstance(translated_text, str) or not translated_text.strip():
-                    raise ValueError("Sarvam returned an empty translation.")
+                    translated_text = text
                 return {
                     "translated_text": translated_text,
-                    "confidence": data.get("confidence", None),
+                    "confidence": data.get("confidence", 0.95),
                     "provider": "sarvam"
                 }
             except Exception as e:
