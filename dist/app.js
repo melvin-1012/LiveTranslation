@@ -13,16 +13,8 @@
 // 1. TypeScript Interfaces & Types
 // =========================================================================
 import { createClient } from '@supabase/supabase-js';
-const LOCAL_SUPABASE_URL = 'http://127.0.0.1:54321';
-const LOCAL_SUPABASE_KEY = 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH';
-const CLOUD_SUPABASE_URL = 'https://yisescosbfuwpddywurr.supabase.co';
-const CLOUD_SUPABASE_KEY = 'sb_publishable_GjdQtqDNXkJbuRJaGHi-qw_cEf7I9Z3';
-const isLocalhost = typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-const SUPABASE_URL = (typeof window !== 'undefined' && window.SUPABASE_URL) ||
-    (isLocalhost ? LOCAL_SUPABASE_URL : CLOUD_SUPABASE_URL);
-const SUPABASE_PUBLISHABLE_KEY = (typeof window !== 'undefined' && window.SUPABASE_ANON_KEY) ||
-    (SUPABASE_URL.includes('127.0.0.1') || SUPABASE_URL.includes('localhost') ? LOCAL_SUPABASE_KEY : CLOUD_SUPABASE_KEY);
+const SUPABASE_URL = 'https://yisescosbfuwpddywurr.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_GjdQtqDNXkJbuRJaGHi-qw_cEf7I9Z3';
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const initialAuthUIState = {
     mode: 'closed',
