@@ -458,6 +458,22 @@ document.addEventListener('DOMContentLoaded', () => {
             liveAlertBox.classList.add('hidden');
         }
     }
+    function describeError(error) {
+        if (error instanceof Error)
+            return error.message;
+        if (typeof error === 'string')
+            return error;
+        if (error && typeof error === 'object') {
+            const errorData = error;
+            const parts = [errorData.message, errorData.details, errorData.hint]
+                .filter((part) => typeof part === 'string' && part.length > 0);
+            if (typeof errorData.code === 'string')
+                parts.push(`Code: ${errorData.code}`);
+            if (parts.length)
+                return parts.join(' ');
+        }
+        return 'An unexpected error occurred.';
+    }
     if (dismissAlertBtn) {
         dismissAlertBtn.addEventListener('click', dismissLiveAlert);
     }
@@ -1417,7 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 closeAuthModal();
             }
             catch (error) {
-                showAuthStatus(error instanceof Error ? error.message : String(error), 'error');
+                showAuthStatus(describeError(error), 'error');
             }
             finally {
                 loginPassword.value = '';
@@ -1523,7 +1539,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             catch (error) {
-                showAuthStatus(error instanceof Error ? error.message : String(error), 'error');
+                showAuthStatus(describeError(error), 'error');
             }
             finally {
                 signupPassword.value = '';
@@ -1575,12 +1591,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const shouldHydrateProfile = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
                 const refreshHistory = async () => {
                     if (shouldHydrateProfile) {
-                        await hydrateUserProfile(changedUser);
+                        try {
+                            await hydrateUserProfile(changedUser);
+                        }
+                        catch (error) {
+                            showLiveAlert('info', 'Profile sync failed', describeError(error));
+                        }
                     }
                     await loadHistoryList();
                 };
                 void refreshHistory().catch((error) => {
-                    showLiveAlert('info', 'Profile or history sync failed', error instanceof Error ? error.message : String(error));
+                    showLiveAlert('info', 'History sync failed', describeError(error));
                 });
             }, 0);
         }
@@ -1596,22 +1617,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     void (async () => {
+        let sessionUser = null;
         try {
             const { data, error } = await supabase.auth.getSession();
             if (error)
                 throw error;
-            currentUser = data.session?.user || null;
-            updateAccountUI(currentUser);
-            if (currentUser) {
-                closeAuthModal();
-                await hydrateUserProfile(currentUser);
-                await loadHistoryList();
-            }
+            sessionUser = data.session?.user || null;
         }
         catch (error) {
             currentUser = null;
             updateAccountUI(null);
-            showLiveAlert('info', 'Authentication status unavailable', error instanceof Error ? error.message : String(error));
+            showLiveAlert('info', 'Authentication status unavailable', describeError(error));
+            return;
         }
+        currentUser = sessionUser;
+        updateAccountUI(currentUser);
+        if (!currentUser)
+            return;
+        closeAuthModal();
+        try {
+            await hydrateUserProfile(currentUser);
+        }
+        catch (error) {
+            showLiveAlert('info', 'Profile sync failed', describeError(error));
+        }
+        await loadHistoryList();
     })();
 });

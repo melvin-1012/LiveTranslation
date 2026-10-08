@@ -717,6 +717,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function describeError(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object') {
+      const errorData = error as Record<string, unknown>;
+      const parts = [errorData.message, errorData.details, errorData.hint]
+        .filter((part): part is string => typeof part === 'string' && part.length > 0);
+      if (typeof errorData.code === 'string') parts.push(`Code: ${errorData.code}`);
+      if (parts.length) return parts.join(' ');
+    }
+    return 'An unexpected error occurred.';
+  }
+
   if (dismissAlertBtn) {
     dismissAlertBtn.addEventListener('click', dismissLiveAlert);
   }
@@ -1748,7 +1761,7 @@ document.addEventListener('DOMContentLoaded', () => {
         closeAuthModal();
       } catch (error) {
         showAuthStatus(
-          error instanceof Error ? error.message : String(error),
+          describeError(error),
           'error'
         );
       } finally {
@@ -1872,7 +1885,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (error) {
         showAuthStatus(
-          error instanceof Error ? error.message : String(error),
+          describeError(error),
           'error'
         );
       } finally {
@@ -1928,16 +1941,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const shouldHydrateProfile = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
         const refreshHistory = async () => {
           if (shouldHydrateProfile) {
-            await hydrateUserProfile(changedUser);
+            try {
+              await hydrateUserProfile(changedUser);
+            } catch (error) {
+              showLiveAlert('info', 'Profile sync failed', describeError(error));
+            }
           }
           await loadHistoryList();
         };
         void refreshHistory().catch((error: unknown) => {
-          showLiveAlert(
-            'info',
-            'Profile or history sync failed',
-            error instanceof Error ? error.message : String(error)
-          );
+          showLiveAlert('info', 'History sync failed', describeError(error));
         });
       }, 0);
     } else {
@@ -1952,26 +1965,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   void (async () => {
+    let sessionUser: User | null = null;
     try {
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
-
-      currentUser = data.session?.user || null;
-      updateAccountUI(currentUser);
-      if (currentUser) {
-        closeAuthModal();
-        await hydrateUserProfile(currentUser);
-        await loadHistoryList();
-      }
+      sessionUser = data.session?.user || null;
     } catch (error) {
       currentUser = null;
       updateAccountUI(null);
       showLiveAlert(
         'info',
         'Authentication status unavailable',
-        error instanceof Error ? error.message : String(error)
+        describeError(error)
       );
+      return;
     }
+
+    currentUser = sessionUser;
+    updateAccountUI(currentUser);
+    if (!currentUser) return;
+
+    closeAuthModal();
+    try {
+      await hydrateUserProfile(currentUser);
+    } catch (error) {
+      showLiveAlert('info', 'Profile sync failed', describeError(error));
+    }
+    await loadHistoryList();
   })();
 
 });
