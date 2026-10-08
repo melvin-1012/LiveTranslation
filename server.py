@@ -5,6 +5,7 @@ import asyncio
 import os
 import uuid
 import httpx
+import base64
 from dotenv import load_dotenv
 import websockets as ws_client
 import requests
@@ -160,15 +161,21 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def deepgram_handler():
         nonlocal utterance_sequence
-        headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         
         while True:
-            # Deepgram nova-2 doesn't support Tamil/Telugu/etc. We must use nova-3 for Dravidian languages.
-            deepgram_model = "nova-3" if current_source_lang in DRAVIDIAN_LANGUAGES else "nova-2"
-            dg_url = f"wss://api.deepgram.com/v1/listen?model={deepgram_model}&encoding=linear16&sample_rate=16000&language={current_source_lang}"
+            use_sarvam_asr = (current_source_lang == 'ml')
+            
+            if use_sarvam_asr:
+                sarvam_lang = lang_map.get(current_source_lang, "ml-IN")
+                ws_url = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code={sarvam_lang}&model=saaras:v4"
+                headers = {"api-subscription-key": SARVAM_API_KEY}
+            else:
+                deepgram_model = "nova-3" if current_source_lang in DRAVIDIAN_LANGUAGES else "nova-2"
+                ws_url = f"wss://api.deepgram.com/v1/listen?model={deepgram_model}&encoding=linear16&sample_rate=16000&language={current_source_lang}"
+                headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
             
             try:
-                async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
+                async with ws_client.connect(ws_url, additional_headers=headers) as ws_backend:
                     
                     async def sender():
                         while True:
@@ -178,22 +185,34 @@ async def websocket_endpoint(websocket: WebSocket):
                             elif msg["type"] == "reconnect":
                                 return "reconnect"
                             elif msg["type"] == "audio":
-                                await deepgram_ws.send(msg["data"])
+                                if use_sarvam_asr:
+                                    b64 = base64.b64encode(msg["data"]).decode("utf-8")
+                                    await ws_backend.send(json.dumps({"event": "audio_input", "audio": b64}))
+                                else:
+                                    await ws_backend.send(msg["data"])
 
                     async def receiver():
                         nonlocal utterance_sequence
                         try:
                             while True:
-                                response_str = await deepgram_ws.recv()
+                                response_str = await ws_backend.recv()
                                 response_json = json.loads(response_str)
                                 
-                                is_final = response_json.get("is_final")
-                                alternatives = response_json.get("channel", {}).get("alternatives", [])
+                                transcript = ""
+                                is_final = False
                                 
-                                if alternatives:
-                                    transcript = alternatives[0].get("transcript", "")
-                                    
-                                    if transcript and is_final:
+                                if use_sarvam_asr:
+                                    if response_json.get("event") == "transcript":
+                                        transcript = response_json.get("text", "")
+                                        is_final = response_json.get("is_final", False)
+                                else:
+                                    is_final = response_json.get("is_final", False)
+                                    alternatives = response_json.get("channel", {}).get("alternatives", [])
+                                    if alternatives:
+                                        transcript = alternatives[0].get("transcript", "")
+                                
+                                if transcript:
+                                    if is_final:
                                         print(f"Final Transcript ({current_source_lang}): {transcript}")
 
                                         # All supported language pairs use Sarvam directly.
