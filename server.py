@@ -137,14 +137,14 @@ async def text_to_speech_sarvam(text: str, target_lang: str) -> str:
     url = "https://api.sarvam.ai/text-to-speech"
     payload = {
         "inputs": [text],
-        "target_language_code": LANGUAGE_MAP.get(target_lang, "en-IN"),
-        "speaker": "meera",
+        "target_language_code": LANGUAGE_MAP.get(target_lang, "hi-IN"),
+        "speaker": "ritu",
         "pitch": 0,
         "pace": 1.0,
         "loudness": 1.5,
         "speech_sample_rate": 8000,
         "enable_preprocessing": True,
-        "model": "bulbul:v1"
+        "model": "bulbul:v3"
     }
     headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
     
