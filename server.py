@@ -59,7 +59,7 @@ async def translate_text_sarvam(text: str, source_lang: str, target_lang: str) -
         "target_language_code": lang_map.get(target_lang, "hi-IN"),
         "speaker_gender": "Male",
         "mode": "formal",
-        "model": "sarvam-translate",
+        "model": "sarvam-translate:v1",
         "enable_code_mixing": True
     }
     headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
