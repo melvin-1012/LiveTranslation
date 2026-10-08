@@ -121,7 +121,11 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal current_target_lang, current_source_lang
         try:
             while True:
-                message = await websocket.receive()
+                try:
+                    message = await websocket.receive()
+                except WebSocketDisconnect:
+                    await message_queue.put({"type": "disconnect"})
+                    break
                 
                 if "text" in message and message["text"]:
                     try:
@@ -274,7 +278,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             result = sender_task.result()
                             if result == "reconnect":
-                                await deepgram_ws.send(b'')
+                                await ws_backend.send(b'')
                                 continue 
                         except asyncio.CancelledError:
                             break 
