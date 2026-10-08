@@ -158,7 +158,8 @@ async def websocket_endpoint(websocket: WebSocket):
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         
         while True:
-            dg_url = f"wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&language={current_source_lang}"
+            # Omit model=nova-2 so Deepgram automatically routes to the latest model (e.g. Nova-3) that supports Dravidian languages
+            dg_url = f"wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&language={current_source_lang}"
             
             try:
                 async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
