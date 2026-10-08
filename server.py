@@ -3,6 +3,8 @@ import uvicorn
 import json
 import asyncio
 import os
+import uuid
+import httpx
 from dotenv import load_dotenv
 import websockets as ws_client
 import requests
@@ -11,33 +13,66 @@ load_dotenv() # Load variables from .env file
 
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+supabase_client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        from supabase import create_client
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Supabase Database connected.")
+    except Exception as e:
+        print(f"Failed to connect to Supabase: {e}")
+
+DRAVIDIAN_LANGUAGES = {'ta', 'te', 'kn', 'ml'}
 
 app = FastAPI()
 
-async def translate_text(text: str, target_lang: str) -> str:
+async def translate_text_google(text: str, target_lang: str) -> str:
     if not GOOGLE_API_KEY:
-        return "[Translation missing - GOOGLE_API_KEY not set]"
-    if not text.strip():
-        return ""
+        return "[Google API Key missing]"
+    if not text.strip(): return ""
         
     def fetch_translation():
         url = f"https://translation.googleapis.com/language/translate/v2?key={GOOGLE_API_KEY}"
-        payload = {
-            "q": text,
-            "target": target_lang,
-            "format": "text"
-        }
+        payload = {"q": text, "target": target_lang, "format": "text"}
         response = requests.post(url, json=payload)
         if response.status_code == 200:
             return response.json()["data"]["translations"][0]["translatedText"]
-        else:
-            print(f"Translation error: {response.text}")
-            return "[Translation Error]"
+        return "[Google Translation Error]"
 
-    # Run blocking requests call in a thread pool
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, fetch_translation)
-    return result
+    return await loop.run_in_executor(None, fetch_translation)
+
+async def translate_text_sarvam(text: str, source_lang: str, target_lang: str) -> str:
+    if not SARVAM_API_KEY:
+        return "[Sarvam API Key missing]"
+    if not text.strip(): return ""
+    
+    lang_map = {"en": "en-IN", "hi": "hi-IN", "ta": "ta-IN", "te": "te-IN", "kn": "kn-IN", "ml": "ml-IN"}
+    url = "https://api.sarvam.ai/translate"
+    payload = {
+        "input": text,
+        "source_language_code": lang_map.get(source_lang, "en-IN"),
+        "target_language_code": lang_map.get(target_lang, "hi-IN"),
+        "speaker_gender": "Male",
+        "mode": "formal",
+        "model": "sarvam-translate",
+        "enable_code_mixing": True
+    }
+    headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            resp.raise_for_status()
+            # Sarvam API returns JSON containing 'translated_text'
+            return resp.json().get("translated_text", text)
+        except Exception as e:
+            print(f"Sarvam API Error: {e}")
+            return f"[Sarvam Error]"
 
 @app.websocket("/ws/translate")
 async def websocket_endpoint(websocket: WebSocket):
@@ -45,19 +80,31 @@ async def websocket_endpoint(websocket: WebSocket):
     print("Frontend Client connected!")
     
     if not DEEPGRAM_API_KEY:
-        error_msg = {"error": "DEEPGRAM_API_KEY is not set in environment variables."}
-        await websocket.send_text(json.dumps(error_msg))
+        await websocket.send_text(json.dumps({"error": "DEEPGRAM_API_KEY is not set."}))
         await websocket.close()
         return
 
-    # Default states
     current_target_lang = "hi" 
     current_source_lang = "en"
     
-    # Use a Queue to buffer frontend audio/text while Deepgram is reconnecting
+    session_id = str(uuid.uuid4())
+    utterance_sequence = 0
+    
+    if supabase_client:
+        try:
+            supabase_client.table('translation_sessions').insert({
+                "id": session_id,
+                "user_id": "hackathon_user", # Mock user since auth is frontend only right now
+                "mode": "live",
+                "status": "active",
+                "source_language_id": current_source_lang,
+                "target_language_id": current_target_lang
+            }).execute()
+        except Exception as e:
+            print(f"DB Error creating session: {e}")
+
     message_queue = asyncio.Queue()
 
-    # 1. Task to read from frontend and put into Queue
     async def frontend_receiver():
         nonlocal current_target_lang, current_source_lang
         try:
@@ -70,17 +117,23 @@ async def websocket_endpoint(websocket: WebSocket):
                         if "language" in data:
                             current_target_lang = data["language"]
                             print(f"🔄 Target switched to: {current_target_lang}")
-                            
                         if "source_language" in data:
                             current_source_lang = data["source_language"]
                             print(f"🔄 Source switched to: {current_source_lang}")
-                            # Send a control message to the queue to trigger reconnect
                             await message_queue.put({"type": "reconnect"})
                             
                         if "text_to_translate" in data:
                             txt = data["text_to_translate"]
-                            print(f"📝 Text-to-Text Request: {txt}")
-                            translated = await translate_text(txt, current_target_lang)
+                            
+                            # Routing Logic for Text-to-Text
+                            is_drav_source = current_source_lang in DRAVIDIAN_LANGUAGES
+                            is_drav_or_en_target = current_target_lang == 'en' or current_target_lang in DRAVIDIAN_LANGUAGES
+                            
+                            if is_drav_source and is_drav_or_en_target:
+                                translated = await translate_text_sarvam(txt, current_source_lang, current_target_lang)
+                            else:
+                                translated = await translate_text_google(txt, current_target_lang)
+                                
                             payload = {
                                 "status": "success",
                                 "original_text": txt,
@@ -100,12 +153,11 @@ async def websocket_endpoint(websocket: WebSocket):
             print("Frontend client disconnected.")
             await message_queue.put({"type": "disconnect"})
 
-    # 2. Task to handle Deepgram connection
     async def deepgram_handler():
+        nonlocal utterance_sequence
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         
         while True:
-            # Note: added model=nova-2 for better multilingual support
             dg_url = f"wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&language={current_source_lang}"
             
             try:
@@ -122,6 +174,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await deepgram_ws.send(msg["data"])
 
                     async def receiver():
+                        nonlocal utterance_sequence
                         try:
                             while True:
                                 response_str = await deepgram_ws.recv()
@@ -135,9 +188,31 @@ async def websocket_endpoint(websocket: WebSocket):
                                     
                                     if transcript and is_final:
                                         print(f"Final Transcript ({current_source_lang}): {transcript}")
-                                        translated = await translate_text(transcript, current_target_lang)
-                                        print(f"Translated ({current_target_lang}): {translated}")
                                         
+                                        # Routing Logic for ASR Results
+                                        is_drav_source = current_source_lang in DRAVIDIAN_LANGUAGES
+                                        is_drav_or_en_target = current_target_lang == 'en' or current_target_lang in DRAVIDIAN_LANGUAGES
+                                        
+                                        if is_drav_source and is_drav_or_en_target:
+                                            print("--> Routing to Sarvam Translate API (Dravidian Match)")
+                                            translated = await translate_text_sarvam(transcript, current_source_lang, current_target_lang)
+                                            provider = "sarvam"
+                                        else:
+                                            print("--> Routing to Google Translate API")
+                                            translated = await translate_text_google(transcript, current_target_lang)
+                                            provider = "google"
+                                            
+                                        # Database Save
+                                        utterance_sequence += 1
+                                        if supabase_client:
+                                            try:
+                                                u_id = str(uuid.uuid4())
+                                                supabase_client.table('utterances').insert({"id": u_id, "session_id": session_id, "sequence_number": utterance_sequence}).execute()
+                                                supabase_client.table('asr_results').insert({"utterance_id": u_id, "model_name": "deepgram-nova2", "transcript": transcript, "is_final": True, "asr_status": "final"}).execute()
+                                                supabase_client.table('translation_results').insert({"utterance_id": u_id, "model_name": provider, "translated_text": translated, "is_final": True, "translation_status": "final", "version_number": 1}).execute()
+                                            except Exception as e:
+                                                print(f"DB Save Error: {e}")
+
                                         payload = {
                                             "status": "success",
                                             "original_text": transcript,
@@ -157,7 +232,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                         }
                                         await websocket.send_text(json.dumps(payload))
                         except ws_client.exceptions.ConnectionClosed:
-                            print("Deepgram connection closed.")
+                            pass
 
                     sender_task = asyncio.create_task(sender())
                     receiver_task = asyncio.create_task(receiver())
@@ -174,7 +249,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             result = sender_task.result()
                             if result == "reconnect":
-                                print("Reconnecting to Deepgram to switch listening language...")
                                 await deepgram_ws.send(b'')
                                 continue 
                         except asyncio.CancelledError:
@@ -187,6 +261,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 break 
                 
     await asyncio.gather(frontend_receiver(), deepgram_handler())
+    
+    if supabase_client:
+        try:
+            supabase_client.table('translation_sessions').update({"status": "completed", "ended_at": "now()"}).eq('id', session_id).execute()
+        except:
+            pass
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
