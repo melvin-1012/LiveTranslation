@@ -1,0 +1,12 @@
+{
+  "name": "live-indic-translator",
+  "version": "1.0.0",
+  "description": "Real-time speech translation system for English and Indian languages",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
