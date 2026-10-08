@@ -14,8 +14,6 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 app = FastAPI()
 
-TARGET_LANGUAGE = "hi" # Default to Hindi (can be changed dynamically later)
-
 async def translate_text(text: str, target_lang: str) -> str:
     if not GOOGLE_API_KEY:
         return "[Translation missing - GOOGLE_API_KEY not set]"
@@ -36,7 +34,7 @@ async def translate_text(text: str, target_lang: str) -> str:
             print(f"Translation error: {response.text}")
             return "[Translation Error]"
 
-    # We run the blocking requests call in a thread pool to avoid freezing the WebSocket
+    # Run blocking requests call in a thread pool
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, fetch_translation)
     return result
@@ -52,7 +50,9 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
-    # Deepgram WebSocket URL for streaming. 
+    # Default to Hindi, but this variable can now be updated dynamically!
+    current_target_lang = "hi" 
+    
     dg_url = "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&language=en"
     headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
     
@@ -60,10 +60,26 @@ async def websocket_endpoint(websocket: WebSocket):
         async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
             
             async def sender():
+                nonlocal current_target_lang # Allow this function to modify the language variable
                 try:
                     while True:
-                        data = await websocket.receive_bytes()
-                        await deepgram_ws.send(data)
+                        # Receive a generic message from frontend (could be text or bytes)
+                        message = await websocket.receive()
+                        
+                        # 1. If it's a TEXT message, it's a configuration update (like changing language)
+                        if "text" in message and message["text"]:
+                            try:
+                                data = json.loads(message["text"])
+                                if "language" in data:
+                                    current_target_lang = data["language"]
+                                    print(f"🔄 Language dynamically switched to: {current_target_lang}")
+                            except json.JSONDecodeError:
+                                pass
+                                
+                        # 2. If it's a BYTES message, it's audio, forward to Deepgram
+                        elif "bytes" in message and message["bytes"]:
+                            await deepgram_ws.send(message["bytes"])
+                            
                 except WebSocketDisconnect:
                     print("Frontend client disconnected.")
                 except Exception as e:
@@ -85,13 +101,15 @@ async def websocket_endpoint(websocket: WebSocket):
                             
                             if transcript and is_final:
                                 print(f"Final Transcript: {transcript}")
-                                translated = await translate_text(transcript, TARGET_LANGUAGE)
-                                print(f"Translated ({TARGET_LANGUAGE}): {translated}")
+                                # Pass the dynamically updated language to the translation function
+                                translated = await translate_text(transcript, current_target_lang)
+                                print(f"Translated ({current_target_lang}): {translated}")
                                 
                                 payload = {
                                     "status": "success",
                                     "original_text": transcript,
                                     "translated_text": translated,
+                                    "target_language": current_target_lang,
                                     "is_final": True
                                 }
                                 await websocket.send_text(json.dumps(payload))
@@ -101,6 +119,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "status": "success",
                                     "original_text": transcript,
                                     "translated_text": "...", 
+                                    "target_language": current_target_lang,
                                     "is_final": False
                                 }
                                 await websocket.send_text(json.dumps(payload))
