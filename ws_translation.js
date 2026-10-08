@@ -48,6 +48,11 @@
         let baseSource = '';
         let baseTarget = '';
         let currentSource = '';
+        let languageChangeTimer = null;
+        let languageRestartInProgress = false;
+        let languageRestartPending = false;
+        let startAttemptId = 0;
+        let cancelPendingStart = null;
 
         function setStatus(listening) {
             newStartBtn.disabled = listening || starting;
@@ -121,6 +126,11 @@
             if (isStopping) return;
             isStopping = true;
             starting = false;
+            startAttemptId += 1;
+            if (cancelPendingStart) {
+                cancelPendingStart();
+                cancelPendingStart = null;
+            }
 
             // 1. Immediately disconnect audio processor and microphone
             releaseAudio();
@@ -176,6 +186,12 @@
             }
 
             starting = true;
+            const attemptId = ++startAttemptId;
+            let cancelAttempt;
+            const cancelled = new Promise((resolve) => {
+                cancelAttempt = () => resolve(null);
+            });
+            cancelPendingStart = cancelAttempt;
             isStopping = false;
             setStatus(false);
 
@@ -190,11 +206,19 @@
                     sampleRate: 16000
                 });
                 audioContext = context;
-                const microphoneRequest = navigator.mediaDevices.getUserMedia({ audio: true });
-                await Promise.all([context.resume(), microphoneRequest.then((stream) => {
+                const microphoneRequest = navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+                    if (attemptId !== startAttemptId) {
+                        stream.getTracks().forEach((track) => track.stop());
+                        return null;
+                    }
                     mediaStream = stream;
-                })]);
-                if (context.state !== 'running' || !mediaStream) {
+                    return stream;
+                });
+                const audioReady = Promise.all([context.resume(), microphoneRequest])
+                    .then(([, stream]) => stream);
+                const stream = await Promise.race([audioReady, cancelled]);
+                if (!stream || attemptId !== startAttemptId) return;
+                if (context.state !== 'running') {
                     throw new Error('The browser audio context could not be started.');
                 }
 
@@ -214,12 +238,23 @@
                 processor.connect(context.destination);
 
                 // Create session in Supabase database
-                const session = await app.createTranslationSession(sourceLanguage, targetLanguage);
+                const sessionRequest = app.createTranslationSession(sourceLanguage, targetLanguage).then((session) => {
+                    if (attemptId !== startAttemptId) {
+                        void app.finishTranslationSession(session.sessionId).catch((error) => {
+                            console.warn('Could not complete cancelled session:', error);
+                        });
+                        return null;
+                    }
+                    return session;
+                });
+                const session = await Promise.race([sessionRequest, cancelled]);
+                if (!session || attemptId !== startAttemptId) return;
                 activeSessionId = session.sessionId;
 
                 const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const newWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
                 ws = newWs;
+                if (cancelPendingStart === cancelAttempt) cancelPendingStart = null;
 
                 newWs.onopen = () => {
                     if (isStopping || ws !== newWs || newWs.readyState !== WebSocket.OPEN) {
@@ -287,6 +322,7 @@
                     }
                 };
             } catch (error) {
+                if (attemptId !== startAttemptId) return;
                 console.error('startListening exception:', error);
                 starting = false;
                 isStopping = false;
@@ -305,6 +341,8 @@
                     'Could not start translation',
                     describeError(error)
                 );
+            } finally {
+                if (cancelPendingStart === cancelAttempt) cancelPendingStart = null;
             }
         }
 
@@ -326,13 +364,30 @@
             });
         }
 
-        // Dynamic language switching & swap handling
-        async function handleLanguageChange() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                console.log('[Lang] Language changed while speaking - restarting session for new pair');
-                await stopListening();
-                await startListening();
-            }
+        // Coalesce paired selector/swap events so they cause only one session restart.
+        function handleLanguageChange() {
+            if (!ws && !starting && !languageRestartInProgress) return;
+            if (languageChangeTimer) clearTimeout(languageChangeTimer);
+            languageChangeTimer = setTimeout(() => {
+                languageChangeTimer = null;
+                if (languageRestartInProgress) {
+                    languageRestartPending = true;
+                    return;
+                }
+
+                languageRestartInProgress = true;
+                void (async () => {
+                    do {
+                        languageRestartPending = false;
+                        await stopListening();
+                        await startListening();
+                    } while (languageRestartPending);
+                })().catch((error) => {
+                    reportError('Could not restart translation', describeError(error));
+                }).finally(() => {
+                    languageRestartInProgress = false;
+                });
+            }, 120);
         }
 
         sourceLanguageSelect.addEventListener('change', () => {
