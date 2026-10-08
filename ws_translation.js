@@ -64,9 +64,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log("✅ WebSocket connected to Gen-AI backend.");
                 setStatus('listening');
                 
-                // Immediately send the requested target language
+                // Immediately send BOTH the requested target and source languages
                 const targetLang = languageCodes[targetLanguageSelect.value] || 'hi';
-                ws.send(JSON.stringify({ language: targetLang }));
+                const sourceLang = languageCodes[sourceLanguageSelect.value] || 'en';
+                ws.send(JSON.stringify({ language: targetLang, source_language: sourceLang }));
 
                 // 🎙️ Capture Raw PCM Audio from Laptop Microphone
                 try {
