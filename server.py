@@ -129,6 +129,34 @@ async def translate_text_sarvam(text: str, source_lang: str, target_lang: str) -
             print(f"Sarvam Translate API Error: {e}")
             return ""
 
+async def text_to_speech_sarvam(text: str, target_lang: str) -> str:
+    """Returns Base64 encoded audio string from Sarvam TTS"""
+    if not SARVAM_API_KEY or not text.strip():
+        return None
+        
+    url = "https://api.sarvam.ai/text-to-speech"
+    payload = {
+        "inputs": [text],
+        "target_language_code": LANGUAGE_MAP.get(target_lang, "en-IN"),
+        "speaker": "meera",
+        "pitch": 0,
+        "pace": 1.0,
+        "loudness": 1.5,
+        "speech_sample_rate": 8000,
+        "enable_preprocessing": True,
+        "model": "bulbul:v1"
+    }
+    headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            resp.raise_for_status()
+            return resp.json().get("audios", [None])[0]
+        except Exception as e:
+            print(f"Sarvam TTS Error: {e}")
+            return None
+
 async def route_translation(text: str, source_lang: str, target_lang: str) -> tuple[str, str]:
     """Intelligently routes translation to Sarvam or Google, with graceful fallback."""
     if not text.strip():
@@ -300,6 +328,10 @@ async def websocket_endpoint(websocket: WebSocket):
                             translated, provider = await route_translation(
                                 txt, current_source_lang, current_target_lang
                             )
+                            
+                            # Get TTS Audio from Sarvam
+                            audio_b64 = await text_to_speech_sarvam(translated, current_target_lang)
+                            
                             payload = {
                                 "type": "translation_final",
                                 "status": "success",
@@ -308,7 +340,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "translated_text": translated,
                                 "target_language": current_target_lang,
                                 "is_final": True,
-                                "is_text_to_text": True
+                                "is_text_to_text": True,
+                                "audio_base64": audio_b64
                             }
                             await websocket.send_text(json.dumps(payload))
 
@@ -436,6 +469,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                             latency_ms=calc_latency
                                         )
 
+                                        # Get TTS Audio from Sarvam
+                                        audio_b64 = await text_to_speech_sarvam(translated, current_target_lang)
+
                                         # Send ASR Final and Translation Final to Frontend
                                         payload_asr = {
                                             "type": "asr_final",
@@ -451,7 +487,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                             "original_text": transcript,
                                             "translated_text": translated,
                                             "target_language": current_target_lang,
-                                            "is_final": True
+                                            "is_final": True,
+                                            "audio_base64": audio_b64
                                         }
                                         try:
                                             await websocket.send_text(json.dumps(payload_asr))

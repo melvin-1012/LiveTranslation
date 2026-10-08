@@ -307,6 +307,11 @@
                         targetTranslation.value = baseTarget.trim();
                         sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
                         targetTranslation.scrollTop = targetTranslation.scrollHeight;
+
+                        if (data.audio_base64) {
+                            const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                            audio.play().catch(e => console.warn('Audio playback prevented:', e));
+                        }
                     }
                 };
 
@@ -433,6 +438,10 @@
                         const data = JSON.parse(event.data);
                         if (data.translated_text || data.text) {
                             targetTranslation.value = data.translated_text || data.text;
+                        }
+                        if (data.audio_base64) {
+                            const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                            audio.play().catch(e => console.warn('Audio playback prevented:', e));
                         }
                     } catch {}
                     tempWs.close();
