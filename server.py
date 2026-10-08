@@ -66,13 +66,28 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Receive a generic message from frontend (could be text or bytes)
                         message = await websocket.receive()
                         
-                        # 1. If it's a TEXT message, it's a configuration update (like changing language)
+                        # 1. If it's a TEXT message, it's a configuration update or text-to-text translation
                         if "text" in message and message["text"]:
                             try:
                                 data = json.loads(message["text"])
                                 if "language" in data:
                                     current_target_lang = data["language"]
                                     print(f"🔄 Language dynamically switched to: {current_target_lang}")
+                                
+                                if "text_to_translate" in data:
+                                    # Handle manual text-to-text translation
+                                    txt = data["text_to_translate"]
+                                    print(f"📝 Text-to-Text Request: {txt}")
+                                    translated = await translate_text(txt, current_target_lang)
+                                    payload = {
+                                        "status": "success",
+                                        "original_text": txt,
+                                        "translated_text": translated,
+                                        "target_language": current_target_lang,
+                                        "is_final": True,
+                                        "is_text_to_text": True
+                                    }
+                                    await websocket.send_text(json.dumps(payload))
                             except json.JSONDecodeError:
                                 pass
                                 

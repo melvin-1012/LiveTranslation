@@ -161,5 +161,36 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         
+        // ✍️ Text-to-Text translation (Debounced)
+        let typingTimer;
+        sourceTranscript.addEventListener('input', () => {
+            // Only do text-to-text if we are NOT currently recording audio
+            if (newStartBtn.disabled) return; 
+
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(() => {
+                const text = sourceTranscript.value.trim();
+                if (text && (!ws || ws.readyState !== WebSocket.OPEN)) {
+                    // Open a temporary socket just for text if not connected
+                    ws = new WebSocket('ws://localhost:8000/ws/translate');
+                    ws.onopen = () => {
+                        const targetLang = languageCodes[targetLanguageSelect.value] || 'hi';
+                        ws.send(JSON.stringify({ language: targetLang }));
+                        ws.send(JSON.stringify({ text_to_translate: text }));
+                    };
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.status === 'success' && data.is_text_to_text) {
+                            targetTranslation.value = data.translated_text;
+                        }
+                    };
+                } else if (text && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ text_to_translate: text }));
+                } else if (!text) {
+                    targetTranslation.value = "";
+                }
+            }, 800); // wait 800ms after user stops typing
+        });
+
     }, 500); // 500ms delay to let the UI render first
 });
