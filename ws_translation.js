@@ -109,6 +109,33 @@ document.addEventListener('DOMContentLoaded', () => {
             isStopping = false;
 
             try {
+                const context = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+                audioContext = context;
+                const microphoneRequest = navigator.mediaDevices.getUserMedia({ audio: true });
+                await Promise.all([context.resume(), microphoneRequest.then((stream) => {
+                    mediaStream = stream;
+                })]);
+                if (context.state !== 'running' || !mediaStream) {
+                    throw new Error('The browser audio context could not be started.');
+                }
+
+                const source = context.createMediaStreamSource(mediaStream);
+                processor = context.createScriptProcessor(4096, 1, 1);
+                processor.onaudioprocess = (event) => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let index = 0; index < inputData.length; index++) {
+                        const sample = Math.max(-1, Math.min(1, inputData[index]));
+                        pcm16[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+                    }
+                    ws.send(pcm16.buffer);
+                };
+                source.connect(processor);
+                processor.connect(context.destination);
+
                 const sourceLanguage = sourceLanguageSelect.value;
                 const targetLanguage = targetLanguageSelect.value;
                 const session = await app.createTranslationSession(sourceLanguage, targetLanguage);
@@ -117,8 +144,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
 
-                ws.onopen = async () => {
-                    if (isStopping) {
+                ws.onopen = () => {
+                    if (isStopping || !ws || ws.readyState !== WebSocket.OPEN) {
                         ws.close();
                         return;
                     }
@@ -130,35 +157,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         target_language_id: session.targetLanguageId,
                         token: session.accessToken
                     }));
-
-                    try {
-                        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                            sampleRate: 16000
-                        });
-                        const source = audioContext.createMediaStreamSource(mediaStream);
-                        processor = audioContext.createScriptProcessor(4096, 1, 1);
-                        processor.onaudioprocess = (event) => {
-                            if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
-                            const inputData = event.inputBuffer.getChannelData(0);
-                            const pcm16 = new Int16Array(inputData.length);
-                            for (let index = 0; index < inputData.length; index++) {
-                                const sample = Math.max(-1, Math.min(1, inputData[index]));
-                                pcm16[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-                            }
-                            ws.send(pcm16.buffer);
-                        };
-                        source.connect(processor);
-                        processor.connect(audioContext.destination);
-                        starting = false;
-                        setStatus(true);
-                    } catch (error) {
-                        reportError(
-                            'Microphone unavailable',
-                            error instanceof Error ? error.message : String(error)
-                        );
-                        stopListening();
-                    }
+                    starting = false;
+                    setStatus(true);
                 };
 
                 ws.onmessage = (event) => {
@@ -214,6 +214,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 starting = false;
                 setStatus(false);
+                releaseAudio();
+                if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
                 await completeSession();
                 reportError(
                     'Could not start translation',
