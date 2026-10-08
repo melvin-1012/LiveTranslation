@@ -4,9 +4,10 @@
  * Converted to TypeScript with strict type definitions for:
  *  - Translation Sessions
  *  - Utterances
- *  - Application State (historyList, sessionDetail, historyLoading, historyError, preferencesSaveStatus)
+ *  - Application State (historyList, sessionDetail, historyLoading, historyError, preferencesSaveStatus, authUI)
  *  - Speech Recognition values & event interfaces
  *  - Live Session UI Alerts
+ *  - Authentication UI (Login, Signup, Validation, Password Show/Hide)
  */
 // =========================================================================
 // 2. Mock Data Initialization
@@ -115,13 +116,39 @@ const INITIAL_MOCK_SESSIONS = [
         utterances: []
     }
 ];
+const initialAuthUIState = {
+    mode: 'login',
+    statusMessage: null,
+    statusType: null,
+    loginForm: {
+        email: '',
+        password: '',
+        rememberMe: false
+    },
+    signupForm: {
+        fullName: '',
+        email: '',
+        password: '',
+        confirmPassword: '',
+        preferredSourceLang: '',
+        preferredTargetLang: ''
+    },
+    loginErrors: {},
+    signupErrors: {},
+    passwordVisibility: {
+        loginPassword: false,
+        signupPassword: false,
+        signupConfirmPassword: false
+    }
+};
 // Application state holding mock hooks
 const state = {
     historyList: [...INITIAL_MOCK_SESSIONS],
     sessionDetail: null,
     historyLoading: false,
     historyError: null,
-    preferencesSaveStatus: null
+    preferencesSaveStatus: null,
+    authUI: initialAuthUIState
 };
 // Language code dictionary for speech recognition
 const languageCodes = {
@@ -132,6 +159,26 @@ const languageCodes = {
     Kannada: 'kn-IN',
     Malayalam: 'ml-IN'
 };
+// Helper: Email format validation regex
+function isValidEmail(email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+}
+// Eye Icons SVG helpers
+const EYE_OPEN_SVG = `
+  <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+    <circle cx="12" cy="12" r="3"/>
+  </svg>
+`;
+const EYE_OFF_SVG = `
+  <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+    <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+    <line x1="2" y1="2" x2="22" y2="22"/>
+  </svg>
+`;
 // =========================================================================
 // 3. Application Execution (DOM Setup & Event Wireup)
 // =========================================================================
@@ -199,6 +246,47 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionDetailEmpty = document.getElementById('sessionDetailEmpty');
     const utteranceSequenceContainer = document.getElementById('utteranceSequenceContainer');
     const sessionDetailBackBtn = document.getElementById('sessionDetailBackBtn');
+    // =========================================================================
+    // Authentication DOM Elements
+    // =========================================================================
+    const openAuthBtn = document.getElementById('openAuthBtn');
+    const drawerSignInBtn = document.getElementById('drawerSignInBtn');
+    const authModalOverlay = document.getElementById('authModalOverlay');
+    const authModal = document.getElementById('authModal');
+    const authCloseBtn = document.getElementById('authCloseBtn');
+    const authModalTitle = document.getElementById('authModalTitle');
+    const authModalSubtitle = document.getElementById('authModalSubtitle');
+    const authStatusBanner = document.getElementById('authStatusBanner');
+    const authStatusText = document.getElementById('authStatusText');
+    // Login Form Elements
+    const loginForm = document.getElementById('loginForm');
+    const loginEmail = document.getElementById('loginEmail');
+    const loginEmailError = document.getElementById('loginEmailError');
+    const loginPassword = document.getElementById('loginPassword');
+    const loginPasswordToggle = document.getElementById('loginPasswordToggle');
+    const loginPasswordError = document.getElementById('loginPasswordError');
+    const loginRememberMe = document.getElementById('loginRememberMe');
+    const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+    const googleSignInBtn = document.getElementById('googleSignInBtn');
+    const switchToSignupBtn = document.getElementById('switchToSignupBtn');
+    // Signup Form Elements
+    const signupForm = document.getElementById('signupForm');
+    const signupName = document.getElementById('signupName');
+    const signupNameError = document.getElementById('signupNameError');
+    const signupEmail = document.getElementById('signupEmail');
+    const signupEmailError = document.getElementById('signupEmailError');
+    const signupPassword = document.getElementById('signupPassword');
+    const signupPasswordToggle = document.getElementById('signupPasswordToggle');
+    const signupPasswordError = document.getElementById('signupPasswordError');
+    const signupConfirmPassword = document.getElementById('signupConfirmPassword');
+    const signupConfirmPasswordToggle = document.getElementById('signupConfirmPasswordToggle');
+    const signupConfirmPasswordError = document.getElementById('signupConfirmPasswordError');
+    const signupSourceLang = document.getElementById('signupSourceLang');
+    const signupSourceLangError = document.getElementById('signupSourceLangError');
+    const signupTargetLang = document.getElementById('signupTargetLang');
+    const signupTargetLangError = document.getElementById('signupTargetLangError');
+    const signupLangPairError = document.getElementById('signupLangPairError');
+    const switchToLoginBtn = document.getElementById('switchToLoginBtn');
     let recognition = null;
     let isListening = false;
     let prefTimer = null;
@@ -827,7 +915,360 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionDetailBackBtn)
         sessionDetailBackBtn.addEventListener('click', showHistoryListView);
     // =========================================================================
-    // 9. Expose Testing Utilities on Window
+    // 9. Authentication UI Logic (Login & Signup)
+    // =========================================================================
+    function showAuthStatus(message, type = 'info') {
+        if (!authStatusBanner || !authStatusText)
+            return;
+        state.authUI.statusMessage = message;
+        state.authUI.statusType = type;
+        authStatusBanner.className = `auth-status-banner ${type}`;
+        authStatusText.textContent = message;
+        authStatusBanner.classList.remove('hidden');
+    }
+    function clearAuthStatus() {
+        if (!authStatusBanner || !authStatusText)
+            return;
+        state.authUI.statusMessage = null;
+        state.authUI.statusType = null;
+        authStatusBanner.classList.add('hidden');
+        authStatusText.textContent = '';
+    }
+    function setFieldError(inputEl, errorEl, errorMessage) {
+        if (!errorEl)
+            return;
+        if (errorMessage) {
+            if (inputEl) {
+                inputEl.classList.add('input-invalid');
+                inputEl.setAttribute('aria-invalid', 'true');
+            }
+            errorEl.textContent = errorMessage;
+            errorEl.classList.remove('hidden');
+        }
+        else {
+            if (inputEl) {
+                inputEl.classList.remove('input-invalid');
+                inputEl.removeAttribute('aria-invalid');
+            }
+            errorEl.textContent = '';
+            errorEl.classList.add('hidden');
+        }
+    }
+    function clearLoginErrors() {
+        state.authUI.loginErrors = {};
+        setFieldError(loginEmail, loginEmailError);
+        setFieldError(loginPassword, loginPasswordError);
+    }
+    function clearSignupErrors() {
+        state.authUI.signupErrors = {};
+        setFieldError(signupName, signupNameError);
+        setFieldError(signupEmail, signupEmailError);
+        setFieldError(signupPassword, signupPasswordError);
+        setFieldError(signupConfirmPassword, signupConfirmPasswordError);
+        setFieldError(signupSourceLang, signupSourceLangError);
+        setFieldError(signupTargetLang, signupTargetLangError);
+        setFieldError(null, signupLangPairError);
+    }
+    function openAuthModal(mode = 'login') {
+        if (!authModal || !authModalOverlay)
+            return;
+        state.authUI.mode = mode;
+        authModalOverlay.classList.add('active');
+        authModal.classList.add('open');
+        authModalOverlay.setAttribute('aria-hidden', 'false');
+        authModal.setAttribute('aria-hidden', 'false');
+        if (openAuthBtn) {
+            openAuthBtn.setAttribute('aria-expanded', 'true');
+        }
+        switchAuthMode(mode);
+    }
+    function closeAuthModal() {
+        if (!authModal || !authModalOverlay)
+            return;
+        state.authUI.mode = 'closed';
+        authModalOverlay.classList.remove('active');
+        authModal.classList.remove('open');
+        authModalOverlay.setAttribute('aria-hidden', 'true');
+        authModal.setAttribute('aria-hidden', 'true');
+        if (openAuthBtn) {
+            openAuthBtn.setAttribute('aria-expanded', 'false');
+        }
+        clearAuthStatus();
+        clearLoginErrors();
+        clearSignupErrors();
+    }
+    function switchAuthMode(mode) {
+        state.authUI.mode = mode;
+        clearAuthStatus();
+        if (mode === 'login') {
+            if (loginForm)
+                loginForm.classList.remove('hidden');
+            if (signupForm)
+                signupForm.classList.add('hidden');
+            if (authModalTitle)
+                authModalTitle.textContent = 'Welcome Back';
+            if (authModalSubtitle)
+                authModalSubtitle.textContent = 'Sign in to sync your translation sessions';
+            clearSignupErrors();
+            setTimeout(() => loginEmail?.focus(), 50);
+        }
+        else {
+            if (loginForm)
+                loginForm.classList.add('hidden');
+            if (signupForm)
+                signupForm.classList.remove('hidden');
+            if (authModalTitle)
+                authModalTitle.textContent = 'Create Account';
+            if (authModalSubtitle)
+                authModalSubtitle.textContent = 'Set up your profile and language preferences';
+            clearLoginErrors();
+            setTimeout(() => signupName?.focus(), 50);
+        }
+    }
+    // Open/Close triggers
+    if (openAuthBtn) {
+        openAuthBtn.addEventListener('click', () => openAuthModal('login'));
+    }
+    if (drawerSignInBtn) {
+        drawerSignInBtn.addEventListener('click', () => {
+            closeHistoryDrawer();
+            openAuthModal('login');
+        });
+    }
+    if (authCloseBtn) {
+        authCloseBtn.addEventListener('click', closeAuthModal);
+    }
+    if (authModalOverlay) {
+        authModalOverlay.addEventListener('click', closeAuthModal);
+    }
+    if (authModal) {
+        authModal.addEventListener('click', (e) => {
+            if (e.target === authModal) {
+                closeAuthModal();
+            }
+        });
+    }
+    // Escape key closes Auth Modal
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && state.authUI.mode !== 'closed') {
+            closeAuthModal();
+        }
+    });
+    // Switch between Login and Signup
+    if (switchToSignupBtn) {
+        switchToSignupBtn.addEventListener('click', () => switchAuthMode('signup'));
+    }
+    if (switchToLoginBtn) {
+        switchToLoginBtn.addEventListener('click', () => switchAuthMode('login'));
+    }
+    // Password Visibility Toggles
+    function setupPasswordToggle(button, input, key) {
+        if (!button || !input)
+            return;
+        button.addEventListener('click', () => {
+            const isVisible = !state.authUI.passwordVisibility[key];
+            state.authUI.passwordVisibility[key] = isVisible;
+            input.type = isVisible ? 'text' : 'password';
+            button.innerHTML = isVisible ? EYE_OFF_SVG : EYE_OPEN_SVG;
+            button.setAttribute('aria-label', isVisible ? 'Hide password' : 'Show password');
+        });
+    }
+    setupPasswordToggle(loginPasswordToggle, loginPassword, 'loginPassword');
+    setupPasswordToggle(signupPasswordToggle, signupPassword, 'signupPassword');
+    setupPasswordToggle(signupConfirmPasswordToggle, signupConfirmPassword, 'signupConfirmPassword');
+    // Forgot password & Google button handlers (Explicit frontend-only notice)
+    if (forgotPasswordLink) {
+        forgotPasswordLink.addEventListener('click', () => {
+            showAuthStatus('Password recovery is not connected yet. This is a frontend demo.', 'warning');
+        });
+    }
+    if (googleSignInBtn) {
+        googleSignInBtn.addEventListener('click', () => {
+            showAuthStatus('Google OAuth is not connected yet. This is a frontend demo button.', 'info');
+        });
+    }
+    // Real-time input clearing on typing
+    if (loginEmail) {
+        loginEmail.addEventListener('input', () => {
+            if (state.authUI.loginErrors.email) {
+                state.authUI.loginErrors.email = undefined;
+                setFieldError(loginEmail, loginEmailError);
+            }
+        });
+    }
+    if (loginPassword) {
+        loginPassword.addEventListener('input', () => {
+            if (state.authUI.loginErrors.password) {
+                state.authUI.loginErrors.password = undefined;
+                setFieldError(loginPassword, loginPasswordError);
+            }
+        });
+    }
+    if (signupName) {
+        signupName.addEventListener('input', () => {
+            if (state.authUI.signupErrors.fullName) {
+                state.authUI.signupErrors.fullName = undefined;
+                setFieldError(signupName, signupNameError);
+            }
+        });
+    }
+    if (signupEmail) {
+        signupEmail.addEventListener('input', () => {
+            if (state.authUI.signupErrors.email) {
+                state.authUI.signupErrors.email = undefined;
+                setFieldError(signupEmail, signupEmailError);
+            }
+        });
+    }
+    if (signupPassword) {
+        signupPassword.addEventListener('input', () => {
+            if (state.authUI.signupErrors.password) {
+                state.authUI.signupErrors.password = undefined;
+                setFieldError(signupPassword, signupPasswordError);
+            }
+            if (state.authUI.signupErrors.confirmPassword && signupConfirmPassword?.value) {
+                if (signupConfirmPassword.value === signupPassword.value) {
+                    state.authUI.signupErrors.confirmPassword = undefined;
+                    setFieldError(signupConfirmPassword, signupConfirmPasswordError);
+                }
+            }
+        });
+    }
+    if (signupConfirmPassword) {
+        signupConfirmPassword.addEventListener('input', () => {
+            if (state.authUI.signupErrors.confirmPassword) {
+                state.authUI.signupErrors.confirmPassword = undefined;
+                setFieldError(signupConfirmPassword, signupConfirmPasswordError);
+            }
+        });
+    }
+    if (signupSourceLang) {
+        signupSourceLang.addEventListener('change', () => {
+            setFieldError(signupSourceLang, signupSourceLangError);
+            setFieldError(null, signupLangPairError);
+        });
+    }
+    if (signupTargetLang) {
+        signupTargetLang.addEventListener('change', () => {
+            setFieldError(signupTargetLang, signupTargetLangError);
+            setFieldError(null, signupLangPairError);
+        });
+    }
+    // -------------------------------------------------------------------------
+    // Login Form Validation & Submission
+    // -------------------------------------------------------------------------
+    function validateLogin() {
+        const errors = {};
+        const emailVal = loginEmail?.value.trim() || '';
+        const passwordVal = loginPassword?.value || '';
+        if (!emailVal) {
+            errors.email = 'Email address is required.';
+        }
+        else if (!isValidEmail(emailVal)) {
+            errors.email = 'Please enter a valid email address (e.g. name@example.com).';
+        }
+        if (!passwordVal) {
+            errors.password = 'Password cannot be empty.';
+        }
+        state.authUI.loginErrors = errors;
+        setFieldError(loginEmail, loginEmailError, errors.email);
+        setFieldError(loginPassword, loginPasswordError, errors.password);
+        return Object.keys(errors).length === 0;
+    }
+    if (loginForm) {
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            clearAuthStatus();
+            const isValid = validateLogin();
+            if (!isValid)
+                return;
+            // Update state without logging sensitive credentials
+            state.authUI.loginForm = {
+                email: loginEmail.value.trim(),
+                password: '', // Kept empty in state for security
+                rememberMe: loginRememberMe ? loginRememberMe.checked : false
+            };
+            // Rule: Do NOT pretend authentication is real. Show explicit message.
+            showAuthStatus('Authentication is not connected yet. This frontend demo validated your inputs without creating an active session.', 'info');
+        });
+    }
+    // -------------------------------------------------------------------------
+    // Signup Form Validation & Submission
+    // -------------------------------------------------------------------------
+    function validateSignup() {
+        const errors = {};
+        const nameVal = signupName?.value.trim() || '';
+        const emailVal = signupEmail?.value.trim() || '';
+        const passwordVal = signupPassword?.value || '';
+        const confirmPasswordVal = signupConfirmPassword?.value || '';
+        const sourceLangVal = signupSourceLang?.value || '';
+        const targetLangVal = signupTargetLang?.value || '';
+        // Full name validation
+        if (!nameVal) {
+            errors.fullName = 'Full name cannot be empty.';
+        }
+        // Email validation
+        if (!emailVal) {
+            errors.email = 'Email address is required.';
+        }
+        else if (!isValidEmail(emailVal)) {
+            errors.email = 'Please enter a valid email address.';
+        }
+        // Password validation
+        if (!passwordVal) {
+            errors.password = 'Password cannot be empty.';
+        }
+        // Confirm password validation
+        if (!confirmPasswordVal) {
+            errors.confirmPassword = 'Confirm password cannot be empty.';
+        }
+        else if (confirmPasswordVal !== passwordVal) {
+            errors.confirmPassword = 'Confirm password must match password.';
+        }
+        // Source language validation
+        if (!sourceLangVal) {
+            errors.sourceLang = 'Please select a preferred source language.';
+        }
+        // Target language validation
+        if (!targetLangVal) {
+            errors.targetLang = 'Please select a preferred target language.';
+        }
+        // Language pair distinct validation
+        if (sourceLangVal && targetLangVal && sourceLangVal === targetLangVal) {
+            errors.langPair = 'Source and target languages cannot be the same. Please choose distinct languages.';
+        }
+        state.authUI.signupErrors = errors;
+        setFieldError(signupName, signupNameError, errors.fullName);
+        setFieldError(signupEmail, signupEmailError, errors.email);
+        setFieldError(signupPassword, signupPasswordError, errors.password);
+        setFieldError(signupConfirmPassword, signupConfirmPasswordError, errors.confirmPassword);
+        setFieldError(signupSourceLang, signupSourceLangError, errors.sourceLang);
+        setFieldError(signupTargetLang, signupTargetLangError, errors.targetLang);
+        setFieldError(null, signupLangPairError, errors.langPair);
+        return Object.keys(errors).length === 0;
+    }
+    if (signupForm) {
+        signupForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            clearAuthStatus();
+            const isValid = validateSignup();
+            if (!isValid)
+                return;
+            // Update state without logging sensitive credentials
+            state.authUI.signupForm = {
+                fullName: signupName.value.trim(),
+                email: signupEmail.value.trim(),
+                password: '',
+                confirmPassword: '',
+                preferredSourceLang: signupSourceLang.value,
+                preferredTargetLang: signupTargetLang.value
+            };
+            // Rule: Do NOT pretend authentication is real. Show explicit message.
+            showAuthStatus('Authentication is not connected yet. Your registration and language preferences were validated successfully in this frontend demo.', 'info');
+        });
+    }
+    // =========================================================================
+    // 10. Expose Testing Utilities on Window
     // =========================================================================
     window.LiveIndicTranslator = {
         state,
@@ -835,12 +1276,17 @@ document.addEventListener('DOMContentLoaded', () => {
         openSessionDetails,
         showLiveAlert,
         dismissLiveAlert,
-        setStatus
+        setStatus,
+        openAuthModal,
+        closeAuthModal,
+        switchAuthMode
     };
     // Initial Sync
     updateLanguageBadges();
     updateCharCounts();
     updateHistoryCountBadge();
     setStatus('ready');
+    // Automatically open the Login modal on initial page load
+    openAuthModal('login');
 });
 export {};
