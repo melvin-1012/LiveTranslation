@@ -8,6 +8,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"
+      }
+    }
+  </script>
 </head>
 <body>
   <div class="app-background">
@@ -33,12 +40,12 @@
             <polyline points="12 6 12 12 14 14"/>
           </svg>
           <span>History</span>
-          <span class="history-count-badge" id="historyCountBadge">4</span>
+          <span class="history-count-badge hidden" id="historyCountBadge"></span>
         </button>
 
         <!-- Account Area in Header -->
         <div class="account-area" id="accountArea">
-          <button type="button" id="openAuthBtn" class="account-signin-card" title="Sign in to view your history" aria-haspopup="dialog" aria-expanded="true">
+          <button type="button" id="openAuthBtn" class="account-signin-card" title="Sign in to view your history" aria-haspopup="dialog" aria-expanded="false">
             <svg class="account-user-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
               <circle cx="12" cy="7" r="4"/>
@@ -394,9 +401,9 @@
         <!-- Demo / Mock State Tester Bar -->
         <div class="mock-testing-toolbar">
           <span class="mock-toolbar-label">Demo Controls:</span>
-          <button id="btnSimulateEmpty" class="mock-pill-btn" title="Simulate empty history state">Empty State</button>
+          <button id="btnSimulateEmpty" class="mock-pill-btn" title="Reload history from Supabase">Reload History</button>
           <button id="btnSimulateError" class="mock-pill-btn" title="Simulate failed loading state">Error State</button>
-          <button id="btnResetHistory" class="mock-pill-btn" title="Reset mock sessions">Reset</button>
+          <button id="btnResetHistory" class="mock-pill-btn" title="Refresh history from Supabase">Refresh</button>
         </div>
       </div>
 
@@ -437,9 +444,9 @@
   </aside>
 
   <!-- Authentication Modal (Login & Signup) -->
-  <div id="authModalOverlay" class="auth-modal-overlay active" aria-hidden="false"></div>
+  <div id="authModalOverlay" class="auth-modal-overlay" aria-hidden="true"></div>
 
-  <div id="authModal" class="auth-modal open" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-hidden="false">
+  <div id="authModal" class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-hidden="true">
     <div class="auth-modal-card">
       <!-- Modal Header -->
       <header class="auth-modal-header">
@@ -458,12 +465,12 @@
           <line x1="12" y1="16" x2="12" y2="12"></line>
           <line x1="12" y1="8" x2="12.01" y2="8"></line>
         </svg>
-        <span><strong>Frontend Preview:</strong> Authentication is not connected to a backend yet. No real accounts or passwords will be stored.</span>
+        <span><strong>Account security:</strong> Sign in and account creation use Supabase authentication. Passwords are never stored in the application profile.</span>
       </div>
 
       <!-- Submission Status Feedback Banner -->
       <div id="authStatusBanner" class="auth-status-banner hidden" role="status" aria-live="polite">
-        <span id="authStatusText">Authentication is not connected yet.</span>
+        <span id="authStatusText">Supabase authentication status.</span>
       </div>
 
       <!-- ================= LOGIN FORM ================= -->
@@ -662,7 +669,7 @@
     </div>
   </div>
 
-  <script type="module" src="dist/app.js"></script>
-  <script src="ws_translation.js"></script>
+<script src="ws_translation.js"></script>
+<script type="module" src="dist/app.js"></script>
 </body>
 </html>

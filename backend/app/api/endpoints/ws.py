@@ -1,9 +1,12 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import json
+import logging
+from app.services.persistence_queue import persistence_queue
 from app.services.streaming_orchestrator import StreamingOrchestrator, get_provider_factory
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.websocket("/translate")
 async def websocket_translate(websocket: WebSocket):
@@ -17,12 +20,18 @@ async def websocket_translate(websocket: WebSocket):
         return
 
     orchestrator = StreamingOrchestrator(asr_service, trans_service, websocket)
+    finalized = False
 
     try:
         raw_msg = await websocket.receive_text()
         try:
             config = json.loads(raw_msg)
-            if not all(k in config for k in ["session_id", "source_language", "target_language"]):
+            if not all(k in config for k in [
+                "session_id",
+                "source_language",
+                "target_language",
+                "token",
+            ]):
                 raise ValueError("Missing config fields")
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid initial configuration"})
@@ -46,14 +55,27 @@ async def websocket_translate(websocket: WebSocket):
             elif "text" in message:
                 try:
                     data = json.loads(message["text"])
-                    if data.get("type") == "end_utterance":
-                        await orchestrator.finalize()
                 except Exception:
                     await websocket.send_json({"type": "error", "message": "Malformed client message"})
+                    continue
+                if data.get("type") == "end_utterance":
+                    await orchestrator.finalize()
+                    finalized = True
+                    await persistence_queue.queue.join()
+                    break
 
     except WebSocketDisconnect:
-        await orchestrator.finalize()
+        if not finalized:
+            await orchestrator.finalize()
+            await persistence_queue.queue.join()
     except Exception as e:
         if websocket.client_state.value != 3:
             await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.close()
+    finally:
+        try:
+            await asr_service.close()
+        except Exception:
+            logger.exception("Failed to close ASR provider")
+        if websocket.client_state.value != 3:
             await websocket.close()

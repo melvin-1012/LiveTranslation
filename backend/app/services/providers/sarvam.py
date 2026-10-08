@@ -20,13 +20,22 @@ LANGUAGE_MAP = {
 }
 
 def map_lang(app_lang: str) -> str:
-    return LANGUAGE_MAP.get(app_lang, "en-IN")
+    try:
+        return LANGUAGE_MAP[app_lang]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported Sarvam language code: {app_lang}") from exc
 
 def map_lang_reverse(sarvam_lang: str) -> str:
     for k, v in LANGUAGE_MAP.items():
         if v == sarvam_lang:
             return k
-    return "en"
+    raise ValueError(f"Unsupported Sarvam language code: {sarvam_lang}")
+
+
+def map_translation_pair(source_lang: str, target_lang: str) -> tuple[str, str]:
+    if source_lang == target_lang:
+        raise ValueError("Source and target languages must be different.")
+    return map_lang(source_lang), map_lang(target_lang)
 
 class SarvamASRService(ASRService):
     def __init__(self):
@@ -51,7 +60,7 @@ class SarvamASRService(ASRService):
         try:
             self.ws = await websockets.connect(
                 uri,
-                additional_headers={"Authorization": f"Bearer {self.api_key}"}
+                additional_headers={"api-subscription-key": self.api_key}
             )
             self.is_connected = True
             # Start background receive task
@@ -124,16 +133,18 @@ class SarvamTranslationService(TranslationService):
             raise ValueError("SARVAM_API_KEY is not configured.")
         
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "api-subscription-key": self.api_key,
             "Content-Type": "application/json"
         }
         
         # Support code mixing based on env or language combinations
+        sarvam_source, sarvam_target = map_translation_pair(source_lang, target_lang)
         payload = {
-            "text": text,
-            "source_language": map_lang(source_lang),
-            "target_language": map_lang(target_lang),
-            "enable_code_mixing": True
+            "input": text,
+            "source_language_code": sarvam_source,
+            "target_language_code": sarvam_target,
+            "model": "mayura:v1",
+            "mode": "code-mixed"
         }
         
         async with httpx.AsyncClient() as client:
@@ -141,15 +152,17 @@ class SarvamTranslationService(TranslationService):
                 resp = await client.post(self.url, json=payload, headers=headers, timeout=5.0)
                 resp.raise_for_status()
                 data = resp.json()
-                # Assume {"translated_text": "...", "confidence": 0.98}
+                translated_text = data.get("translated_text")
+                if not isinstance(translated_text, str) or not translated_text.strip():
+                    raise ValueError("Sarvam returned an empty translation.")
                 return {
-                    "translated_text": data.get("translated_text", text),
+                    "translated_text": translated_text,
                     "confidence": data.get("confidence", None),
                     "provider": "sarvam"
                 }
             except Exception as e:
                 logger.error(f"Sarvam Translation Error: {e}")
-                return {"translated_text": f"[Error: {str(e)}]", "confidence": 0.0, "provider": "sarvam"}
+                raise
 
     async def translate_partial(self, text: str, source_lang: str, target_lang: str, glossary: dict = None) -> dict:
         return await self._translate(text, source_lang, target_lang)

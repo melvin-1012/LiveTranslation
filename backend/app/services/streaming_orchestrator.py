@@ -58,6 +58,8 @@ class StreamingOrchestrator:
         self.target_lang = None
         self.session_id = None
         self.token = None
+        self.source_language_id = None
+        self.target_language_id = None
         self.last_asr_text = ""
 
     async def transition_state(self, new_state: StreamingState):
@@ -70,6 +72,8 @@ class StreamingOrchestrator:
         self.target_lang = config.get("target_language")
         self.session_id = config.get("session_id")
         self.token = config.get("token")
+        self.source_language_id = config.get("source_language_id")
+        self.target_language_id = config.get("target_language_id")
         
         try:
             db = get_supabase_client(self.token)
@@ -93,7 +97,6 @@ class StreamingOrchestrator:
         asr_result = await self.asr.finalize()
         if asr_result:
             await self._handle_asr_result(asr_result)
-        await self.asr.close()
 
     def _is_stable_partial(self, new_text: str) -> bool:
         # Task 8: Partial Translation Strategy
@@ -114,7 +117,8 @@ class StreamingOrchestrator:
                 "utterance_id": self.utterance_id,
                 "model_name": "sarvam_asr",
                 "transcript": text,
-                "is_final": True
+                "is_final": True,
+                "language_id": self.source_language_id
             })
         else:
             if self.state == StreamingState.UTTERANCE_STARTED:
@@ -169,6 +173,8 @@ class StreamingOrchestrator:
             "translated_text": trans_res["translated_text"],
             "version_number": self.translation_version,
             "is_final": is_final,
+            "source_language_id": self.source_language_id,
+            "target_language_id": self.target_language_id,
             "metrics": metrics_data
         })
 

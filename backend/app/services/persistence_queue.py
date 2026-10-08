@@ -21,11 +21,27 @@ class PersistenceQueue:
                 event = item["type"]
                 data = item["data"]
                 
-                if event == "store_translation_result":
-                    # We assume data contains utterance_id, model_name, translated_text, version_number, is_final
+                if event == "store_asr_result":
+                    translation_db_service.store_asr_result(
+                        db,
+                        data["utterance_id"],
+                        data.get("model_name", "sarvam_asr"),
+                        data["transcript"],
+                        data.get("is_final", True),
+                        data.get("language_id"),
+                    )
+                    if data.get("is_final"):
+                        translation_db_service.update_utterance_transcript(
+                            db,
+                            data["utterance_id"],
+                            data["transcript"],
+                            data.get("language_id"),
+                        )
+                elif event == "store_translation_result":
                     res = translation_db_service.store_translation_result(
                         db, data["utterance_id"], data.get("model_name", "mock_translator"), 
-                        data["translated_text"], data["version_number"], data["is_final"]
+                        data["translated_text"], data["version_number"], data["is_final"],
+                        data.get("source_language_id"), data.get("target_language_id")
                     )
                     if data.get("is_final") and "metrics" in data:
                         # We pass metrics along in the queue item to save the second lookup

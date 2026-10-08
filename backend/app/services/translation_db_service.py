@@ -30,26 +30,62 @@ def create_utterance(db: Client, session_id: str, sequence_number: int) -> Dict[
     res = db.table('utterances').insert({"session_id": session_id, "sequence_number": sequence_number}).execute()
     return res.data[0]
 
-def store_asr_result(db: Client, utterance_id: str, model_name: str, transcript: str, is_final: bool) -> Dict[str, Any]:
-    res = db.table('asr_results').insert({
+def store_asr_result(
+    db: Client,
+    utterance_id: str,
+    model_name: str,
+    transcript: str,
+    is_final: bool,
+    language_id: str = None,
+) -> Dict[str, Any]:
+    data = {
         "utterance_id": utterance_id, 
         "model_name": model_name, 
         "transcript": transcript,
         "is_final": is_final,
         "asr_status": "final" if is_final else "partial"
-    }).execute()
+    }
+    if language_id:
+        data["language_id"] = language_id
+    res = db.table('asr_results').insert(data).execute()
     return res.data[0]
 
-def store_translation_result(db: Client, utterance_id: str, model_name: str, translated_text: str, version_number: int, is_final: bool) -> Dict[str, Any]:
+def update_utterance_transcript(
+    db: Client,
+    utterance_id: str,
+    transcript: str,
+    language_id: str = None,
+) -> Dict[str, Any]:
+    data = {"source_text": transcript}
+    if language_id:
+        data["detected_language_id"] = language_id
+    res = db.table('utterances').update(data).eq('id', utterance_id).execute()
+    return res.data[0] if res.data else {}
+
+def store_translation_result(
+    db: Client,
+    utterance_id: str,
+    model_name: str,
+    translated_text: str,
+    version_number: int,
+    is_final: bool,
+    source_language_id: str = None,
+    target_language_id: str = None,
+) -> Dict[str, Any]:
     # upsert could be used but we rely on UNIQUE constraint and version increments for append-only log
-    res = db.table('translation_results').insert({
+    data = {
         "utterance_id": utterance_id,
         "model_name": model_name,
         "translated_text": translated_text,
         "translation_status": "final" if is_final else "partial",
         "is_final": is_final,
         "version_number": version_number
-    }).execute()
+    }
+    if source_language_id:
+        data["source_language_id"] = source_language_id
+    if target_language_id:
+        data["target_language_id"] = target_language_id
+    res = db.table('translation_results').insert(data).execute()
     return res.data[0]
 
 def store_translation_metrics(db: Client, translation_result_id: str, metrics: dict) -> Dict[str, Any]:

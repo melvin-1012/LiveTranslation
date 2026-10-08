@@ -1,6 +1,6 @@
 /**
  * LiveIndicTranslator - Frontend TypeScript Application Logic
- * Pure Frontend Implementation (No Backend / No DB / No API keys)
+ * Frontend application with Supabase auth/profile/history integration
  * Converted to TypeScript with strict type definitions for:
  *  - Translation Sessions
  *  - Utterances
@@ -10,114 +10,22 @@
  *  - Authentication UI (Login, Signup, Validation, Password Show/Hide)
  */
 // =========================================================================
-// 2. Mock Data Initialization
+// 1. TypeScript Interfaces & Types
 // =========================================================================
-const INITIAL_MOCK_SESSIONS = [
-    {
-        id: 'sess-101',
-        dateTime: 'Oct 8, 2026, 11:42 AM',
-        sourceLanguage: 'English',
-        targetLanguage: 'Tamil',
-        status: 'Completed',
-        duration: '1m 32s',
-        utterances: [
-            {
-                id: 'u101-1',
-                speaker: 'Speaker 1',
-                timestamp: '11:42:04 AM',
-                confidence: 0.96,
-                latency: '114 ms',
-                sourceText: 'Hello, welcome to the live demonstration of our translator.',
-                targetText: 'வணக்கம், எங்கள் மொழிபெயர்ப்பாளரின் நேரடி விளக்கக்காட்சிக்கு வரவேற்கிறோம்.'
-            },
-            {
-                id: 'u101-2',
-                speaker: 'Speaker 1',
-                timestamp: '11:42:18 AM',
-                confidence: 0.94,
-                latency: '128 ms',
-                sourceText: 'We are translating English speech into Indic languages in real time.',
-                targetText: 'நாங்கள் ஆங்கில பேச்சை நிகழ்நேரத்தில் இந்திய மொழிகளில் மொழிபெயர்க்கிறோம்.'
-            },
-            {
-                id: 'u101-3',
-                speaker: 'Speaker 1',
-                timestamp: '11:42:45 AM',
-                confidence: 0.98,
-                latency: '108 ms',
-                sourceText: 'Thank you for testing LiveIndicTranslator.',
-                targetText: 'LiveIndicTranslator ஐ பரிசோதித்ததற்கு நன்றி.'
-            }
-        ]
-    },
-    {
-        id: 'sess-102',
-        dateTime: 'Oct 8, 2026, 10:15 AM',
-        sourceLanguage: 'Hindi',
-        targetLanguage: 'English',
-        status: 'Completed',
-        duration: '48s',
-        utterances: [
-            {
-                id: 'u102-1',
-                speaker: 'Speaker 1',
-                timestamp: '10:15:10 AM',
-                confidence: 0.93,
-                latency: '142 ms',
-                sourceText: 'आज हम अपनी नई प्रणाली का परीक्षण कर रहे हैं।',
-                targetText: 'Today we are testing our new system.'
-            },
-            {
-                id: 'u102-2',
-                speaker: 'Speaker 1',
-                timestamp: '10:15:32 AM',
-                confidence: 0.95,
-                latency: '120 ms',
-                sourceText: 'यह बहुत तेज और सटीक अनुवाद प्रदान करता है।',
-                targetText: 'It provides very fast and accurate translation.'
-            }
-        ]
-    },
-    {
-        id: 'sess-103',
-        dateTime: 'Oct 7, 2026, 04:20 PM',
-        sourceLanguage: 'Telugu',
-        targetLanguage: 'Tamil',
-        status: 'Completed',
-        duration: '2m 10s',
-        utterances: [
-            {
-                id: 'u103-1',
-                speaker: 'Speaker 1',
-                timestamp: '04:20:15 PM',
-                confidence: 0.91,
-                latency: null,
-                sourceText: 'నమస్కారం, మీరు ఎలా ఉన్నారు?',
-                targetText: 'வணக்கம், நீங்கள் எப்படி இருக்கிறீர்கள்?'
-            },
-            {
-                id: 'u103-2',
-                speaker: 'Speaker 1',
-                timestamp: '04:20:45 PM',
-                confidence: null,
-                latency: '135 ms',
-                sourceText: 'నేను బాగున్నాను, ధన్యవాదాలు.',
-                targetText: 'நான் நலமாக இருக்கிறேன், நன்றி.'
-            }
-        ]
-    },
-    {
-        id: 'sess-104',
-        dateTime: 'Oct 7, 2026, 02:05 PM',
-        sourceLanguage: 'Kannada',
-        targetLanguage: 'Malayalam',
-        status: 'Saved',
-        duration: null,
-        utterances: []
-    }
-];
+import { createClient } from '@supabase/supabase-js';
+const LOCAL_SUPABASE_URL = 'http://127.0.0.1:54321';
+const LOCAL_SUPABASE_KEY = 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH';
+const CLOUD_SUPABASE_URL = 'https://yisescosbfuwpddywurr.supabase.co';
+const CLOUD_SUPABASE_KEY = 'sb_publishable_GjdQtqDNXkJbuRJaGHi-qw_cEf7I9Z3';
+const isLocalhost = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const SUPABASE_URL = (typeof window !== 'undefined' && window.SUPABASE_URL) ||
+    (isLocalhost ? LOCAL_SUPABASE_URL : CLOUD_SUPABASE_URL);
+const SUPABASE_PUBLISHABLE_KEY = (typeof window !== 'undefined' && window.SUPABASE_ANON_KEY) ||
+    (SUPABASE_URL.includes('127.0.0.1') || SUPABASE_URL.includes('localhost') ? LOCAL_SUPABASE_KEY : CLOUD_SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const initialAuthUIState = {
-    mode: 'login',
+    mode: 'closed',
     statusMessage: null,
     statusType: null,
     loginForm: {
@@ -141,9 +49,8 @@ const initialAuthUIState = {
         signupConfirmPassword: false
     }
 };
-// Application state holding mock hooks
 const state = {
-    historyList: [...INITIAL_MOCK_SESSIONS],
+    historyList: [],
     sessionDetail: null,
     historyLoading: false,
     historyError: null,
@@ -158,6 +65,14 @@ const languageCodes = {
     Telugu: 'te-IN',
     Kannada: 'kn-IN',
     Malayalam: 'ml-IN'
+};
+const languageDatabaseCodes = {
+    English: 'en',
+    Tamil: 'ta',
+    Hindi: 'hi',
+    Telugu: 'te',
+    Kannada: 'kn',
+    Malayalam: 'ml'
 };
 // Helper: Email format validation regex
 function isValidEmail(email) {
@@ -243,14 +158,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const utteranceCountTag = document.getElementById('utteranceCountTag');
     const sessionDetailLoading = document.getElementById('sessionDetailLoading');
     const sessionDetailError = document.getElementById('sessionDetailError');
+    const sessionDetailErrorMessage = sessionDetailError?.querySelector('.state-subtitle');
     const sessionDetailEmpty = document.getElementById('sessionDetailEmpty');
     const utteranceSequenceContainer = document.getElementById('utteranceSequenceContainer');
     const sessionDetailBackBtn = document.getElementById('sessionDetailBackBtn');
     // =========================================================================
     // Authentication DOM Elements
     // =========================================================================
+    const accountArea = document.getElementById('accountArea');
     const openAuthBtn = document.getElementById('openAuthBtn');
+    const accountSignInText = openAuthBtn?.querySelector('.account-signin-text');
     const drawerSignInBtn = document.getElementById('drawerSignInBtn');
+    const drawerAccountBanner = document.querySelector('.drawer-account-banner');
     const authModalOverlay = document.getElementById('authModalOverlay');
     const authModal = document.getElementById('authModal');
     const authCloseBtn = document.getElementById('authCloseBtn');
@@ -290,9 +209,112 @@ document.addEventListener('DOMContentLoaded', () => {
     let recognition = null;
     let isListening = false;
     let prefTimer = null;
+    let historyLoadRequest = 0;
+    let historyLoadedForUserId = null;
     // =========================================================================
     // 4. Language & Preferences Handling
     // =========================================================================
+    let currentUser = null;
+    function databaseLanguageCode(language) {
+        const code = languageDatabaseCodes[language];
+        if (!code)
+            throw new Error(`Unsupported language: ${language}`);
+        return code;
+    }
+    async function resolveLanguageIds(sourceLanguage, targetLanguage) {
+        const codes = [
+            databaseLanguageCode(sourceLanguage),
+            databaseLanguageCode(targetLanguage)
+        ];
+        const { data, error } = await supabase
+            .from('supported_languages')
+            .select('id, code')
+            .in('code', codes);
+        if (error)
+            throw error;
+        const source = data?.find((language) => language.code === codes[0]);
+        const target = data?.find((language) => language.code === codes[1]);
+        if (!source || !target) {
+            throw new Error('One or more selected languages are not available.');
+        }
+        return {
+            sourceLanguageId: source.id,
+            targetLanguageId: target.id
+        };
+    }
+    async function saveProfilePreferences(userId, sourceLanguage, targetLanguage, displayName) {
+        const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
+        const profile = {
+            id: userId,
+            preferred_source_language_id: languageIds.sourceLanguageId,
+            preferred_target_language_id: languageIds.targetLanguageId
+        };
+        if (displayName)
+            profile.display_name = displayName;
+        const { error } = await supabase
+            .from('profiles')
+            .upsert(profile, { onConflict: 'id' });
+        if (error)
+            throw error;
+    }
+    async function createTranslationSession(sourceLanguage, targetLanguage) {
+        if (!currentUser) {
+            openAuthModal('login');
+            throw new Error('Sign in to save translation sessions.');
+        }
+        if (sourceLanguage === targetLanguage) {
+            throw new Error('Choose two different languages for translation.');
+        }
+        const { data: authData, error: authError } = await supabase.auth.getSession();
+        if (authError)
+            throw authError;
+        if (!authData.session?.access_token || authData.session.user.id !== currentUser.id) {
+            throw new Error('Your sign-in session has expired. Please sign in again.');
+        }
+        const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
+        const { data, error } = await supabase
+            .from('translation_sessions')
+            .insert({
+            user_id: currentUser.id,
+            source_language_id: languageIds.sourceLanguageId,
+            target_language_id: languageIds.targetLanguageId,
+            mode: 'one_way',
+            status: 'active'
+        })
+            .select('id')
+            .single();
+        if (error)
+            throw error;
+        return {
+            sessionId: data.id,
+            accessToken: authData.session.access_token,
+            sourceLanguageCode: databaseLanguageCode(sourceLanguage),
+            targetLanguageCode: databaseLanguageCode(targetLanguage),
+            sourceLanguageId: languageIds.sourceLanguageId,
+            targetLanguageId: languageIds.targetLanguageId
+        };
+    }
+    async function finishTranslationSession(sessionId) {
+        if (!currentUser)
+            return;
+        const { error } = await supabase
+            .from('translation_sessions')
+            .update({ status: 'completed', ended_at: new Date().toISOString() })
+            .eq('id', sessionId)
+            .eq('user_id', currentUser.id);
+        if (error)
+            throw error;
+        if (historyDrawer?.classList.contains('open'))
+            await loadHistoryList();
+    }
+    function setPreferencesStatus(status, message) {
+        state.preferencesSaveStatus = status;
+        if (!preferencesStatusBadge)
+            return;
+        preferencesStatusBadge.className = `pref-status-pill ${status || ''}`;
+        preferencesStatusBadge.textContent = message || '';
+        preferencesStatusBadge.classList.toggle('hidden', !message);
+    }
     function updateLanguageBadges() {
         if (sourceLangBadge && sourceLanguageSelect) {
             sourceLangBadge.textContent = sourceLanguageSelect.value;
@@ -348,24 +370,26 @@ document.addEventListener('DOMContentLoaded', () => {
             updateCharCounts();
         });
     }
-    // Save Preferences Action (Mock only - No database connection)
+    // Save the selected language pair to the signed-in user's profile.
     if (savePreferencesBtn) {
-        savePreferencesBtn.addEventListener('click', () => {
+        savePreferencesBtn.addEventListener('click', async () => {
             if (prefTimer)
                 clearTimeout(prefTimer);
-            state.preferencesSaveStatus = 'saving';
-            preferencesStatusBadge.className = 'pref-status-pill saving';
-            preferencesStatusBadge.textContent = 'Saving...';
-            preferencesStatusBadge.classList.remove('hidden');
-            setTimeout(() => {
-                state.preferencesSaveStatus = 'success';
-                preferencesStatusBadge.className = 'pref-status-pill success';
-                preferencesStatusBadge.innerHTML = `✓ Saved (${sourceLanguageSelect.value} → ${targetLanguageSelect.value})`;
-                prefTimer = setTimeout(() => {
-                    preferencesStatusBadge.classList.add('hidden');
-                    state.preferencesSaveStatus = null;
-                }, 3200);
-            }, 450);
+            if (!currentUser) {
+                setPreferencesStatus('error', 'Sign in to save preferences.');
+                openAuthModal('login');
+                return;
+            }
+            setPreferencesStatus('saving', 'Saving...');
+            try {
+                await saveProfilePreferences(currentUser.id, sourceLanguageSelect.value, targetLanguageSelect.value);
+                setPreferencesStatus('success', `✓ Saved (${sourceLanguageSelect.value} → ${targetLanguageSelect.value})`);
+                prefTimer = setTimeout(() => setPreferencesStatus(null), 3200);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setPreferencesStatus('error', `Could not save preferences: ${message}`);
+            }
         });
     }
     // =========================================================================
@@ -671,10 +695,15 @@ document.addEventListener('DOMContentLoaded', () => {
         historyDrawerOverlay.addEventListener('click', closeHistoryDrawer);
     function updateHistoryCountBadge() {
         if (historyCountBadge) {
+            const isAuthenticated = currentUser !== null
+                && historyLoadedForUserId === currentUser.id;
             historyCountBadge.textContent = String(state.historyList.length);
+            historyCountBadge.classList.toggle('hidden', !isAuthenticated);
         }
     }
     function loadHistoryList(simulateError = false) {
+        const requestId = ++historyLoadRequest;
+        const requestedUserId = currentUser?.id || null;
         state.historyLoading = true;
         state.historyError = null;
         if (historyLoadingState)
@@ -685,18 +714,75 @@ document.addEventListener('DOMContentLoaded', () => {
             historyEmptyState.classList.add('hidden');
         if (historyItemsContainer)
             historyItemsContainer.classList.add('hidden');
-        setTimeout(() => {
-            state.historyLoading = false;
-            if (historyLoadingState)
-                historyLoadingState.classList.add('hidden');
-            if (simulateError) {
-                state.historyError = 'Network timeout contacting translation history store.';
+        return (async () => {
+            try {
+                if (simulateError) {
+                    throw new Error('Network timeout contacting translation history store.');
+                }
+                if (requestedUserId) {
+                    const { data, error } = await supabase
+                        .from('session_history_view')
+                        .select('*')
+                        .eq('user_id', requestedUserId)
+                        .order('started_at', { ascending: false });
+                    if (error)
+                        throw error;
+                    if (requestId !== historyLoadRequest || currentUser?.id !== requestedUserId)
+                        return;
+                    state.historyList = (data || []).map((row) => {
+                        const startedAt = new Date(row.started_at);
+                        const endedAt = row.ended_at ? new Date(row.ended_at) : null;
+                        const durationMs = endedAt ? endedAt.getTime() - startedAt.getTime() : null;
+                        const duration = durationMs !== null && durationMs >= 0
+                            ? `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`
+                            : null;
+                        const status = row.status === 'completed'
+                            ? 'Completed'
+                            : row.status === 'active'
+                                ? 'Active'
+                                : 'Saved';
+                        return {
+                            id: row.session_id,
+                            dateTime: startedAt.toLocaleString(),
+                            sourceLanguage: row.source_language || row.source_language_code || 'Unknown',
+                            targetLanguage: row.target_language || row.target_language_code || 'Unknown',
+                            status,
+                            duration,
+                            utterances: [],
+                            utteranceCount: Number(row.total_utterances || 0)
+                        };
+                    });
+                    historyLoadedForUserId = requestedUserId;
+                }
+                else {
+                    state.historyList = [];
+                    historyLoadedForUserId = null;
+                }
+            }
+            catch (error) {
+                if (requestId !== historyLoadRequest || currentUser?.id !== requestedUserId)
+                    return;
+                state.historyError = error instanceof Error ? error.message : String(error);
+            }
+            finally {
+                if (requestId === historyLoadRequest) {
+                    state.historyLoading = false;
+                    if (historyLoadingState)
+                        historyLoadingState.classList.add('hidden');
+                }
+            }
+            if (requestId !== historyLoadRequest || currentUser?.id !== requestedUserId)
+                return;
+            updateHistoryCountBadge();
+            if (state.historyError) {
                 if (historyErrorMessage)
                     historyErrorMessage.textContent = state.historyError;
                 if (historyErrorState)
                     historyErrorState.classList.remove('hidden');
                 return;
             }
+            if (!currentUser)
+                return;
             if (!state.historyList || state.historyList.length === 0) {
                 if (historyEmptyState)
                     historyEmptyState.classList.remove('hidden');
@@ -705,7 +791,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderHistoryCards();
             if (historyItemsContainer)
                 historyItemsContainer.classList.remove('hidden');
-        }, 380);
+        })();
     }
     if (historyRetryBtn) {
         historyRetryBtn.addEventListener('click', () => {
@@ -726,7 +812,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const durationHtml = session.duration
                 ? `<span class="session-duration-tag">⏱ ${session.duration}</span>`
                 : '';
-            const utteranceCount = session.utterances ? session.utterances.length : 0;
+            const utteranceCount = session.utteranceCount ?? session.utterances.length;
             card.innerHTML = `
         <div class="session-card-header">
           <span class="session-datetime">${session.dateTime}</span>
@@ -759,9 +845,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Simulation buttons for validating UI states
     if (btnSimulateEmpty) {
         btnSimulateEmpty.addEventListener('click', () => {
-            state.historyList = [];
-            updateHistoryCountBadge();
-            loadHistoryList(false);
+            void loadHistoryList();
         });
     }
     if (btnSimulateError) {
@@ -771,9 +855,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (btnResetHistory) {
         btnResetHistory.addEventListener('click', () => {
-            state.historyList = [...INITIAL_MOCK_SESSIONS];
-            updateHistoryCountBadge();
-            loadHistoryList(false);
+            void loadHistoryList();
         });
     }
     // =========================================================================
@@ -790,7 +872,7 @@ document.addEventListener('DOMContentLoaded', () => {
             historyDrawerTitle.textContent = 'Translation History';
         state.sessionDetail = null;
     }
-    function openSessionDetails(sessionId) {
+    async function openSessionDetails(sessionId) {
         if (historyListView)
             historyListView.classList.add('hidden');
         if (sessionDetailView)
@@ -809,10 +891,31 @@ document.addEventListener('DOMContentLoaded', () => {
             sessionOverviewCard.innerHTML = '';
         if (utteranceSequenceContainer)
             utteranceSequenceContainer.innerHTML = '';
-        setTimeout(() => {
-            if (sessionDetailLoading)
-                sessionDetailLoading.classList.add('hidden');
-            const foundSession = state.historyList.find((s) => s.id === sessionId);
+        try {
+            let foundSession = state.historyList.find((session) => session.id === sessionId);
+            if (currentUser && foundSession) {
+                const { data, error } = await supabase
+                    .from('translation_performance_view')
+                    .select('*')
+                    .eq('session_id', sessionId)
+                    .order('sequence_number', { ascending: true });
+                if (error)
+                    throw error;
+                const utterances = (data || []).map((row) => ({
+                    id: row.utterance_id,
+                    speaker: 'Speaker 1',
+                    timestamp: null,
+                    confidence: row.translation_confidence === null
+                        ? null
+                        : Number(row.translation_confidence),
+                    latency: row.end_to_end_latency_ms === null
+                        ? null
+                        : `${row.end_to_end_latency_ms} ms`,
+                    sourceText: row.source_text || '',
+                    targetText: row.translated_text || ''
+                }));
+                foundSession = { ...foundSession, utterances, utteranceCount: utterances.length };
+            }
             if (!foundSession) {
                 state.sessionDetail = null;
                 if (sessionDetailError)
@@ -822,7 +925,22 @@ document.addEventListener('DOMContentLoaded', () => {
             state.sessionDetail = foundSession;
             renderSessionOverview(foundSession);
             renderUtterances(foundSession.utterances);
-        }, 280);
+        }
+        catch (error) {
+            state.sessionDetail = null;
+            if (sessionDetailErrorMessage) {
+                sessionDetailErrorMessage.textContent = error instanceof Error
+                    ? error.message
+                    : String(error);
+            }
+            if (sessionDetailError) {
+                sessionDetailError.classList.remove('hidden');
+            }
+        }
+        finally {
+            if (sessionDetailLoading)
+                sessionDetailLoading.classList.add('hidden');
+        }
     }
     function renderSessionOverview(session) {
         if (!sessionOverviewCard)
@@ -969,6 +1087,96 @@ document.addEventListener('DOMContentLoaded', () => {
         setFieldError(signupTargetLang, signupTargetLangError);
         setFieldError(null, signupLangPairError);
     }
+    function updateAccountUI(user) {
+        const signedIn = Boolean(user);
+        const displayName = user?.user_metadata?.full_name;
+        if (accountSignInText) {
+            accountSignInText.textContent = user
+                ? `${displayName || user.email || 'Signed in'} · Sign out`
+                : 'Sign in to view your history';
+        }
+        if (openAuthBtn) {
+            openAuthBtn.title = signedIn ? 'Sign out' : 'Sign in to view your history';
+            openAuthBtn.setAttribute('aria-expanded', 'false');
+        }
+        if (accountArea) {
+            accountArea.setAttribute('aria-label', signedIn ? 'Signed-in account' : 'Account');
+        }
+        if (drawerAccountBanner) {
+            drawerAccountBanner.classList.toggle('hidden', signedIn);
+        }
+    }
+    async function hydrateUserProfile(user) {
+        const { data: existingProfile, error: profileError } = await supabase
+            .from('profiles')
+            .select('display_name, preferred_source_language_id, preferred_target_language_id')
+            .eq('id', user.id)
+            .maybeSingle();
+        if (profileError)
+            throw profileError;
+        const metadata = user.user_metadata || {};
+        const profileUpdate = { id: user.id };
+        if (typeof metadata.full_name === 'string' && metadata.full_name.trim()) {
+            profileUpdate.display_name = metadata.full_name.trim();
+        }
+        const sourceCode = metadata.preferred_source_language;
+        const targetCode = metadata.preferred_target_language;
+        const sourceLanguage = Object.keys(languageDatabaseCodes)
+            .find((language) => languageDatabaseCodes[language] === sourceCode);
+        const targetLanguage = Object.keys(languageDatabaseCodes)
+            .find((language) => languageDatabaseCodes[language] === targetCode);
+        if (sourceLanguage && targetLanguage) {
+            const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
+            if (!existingProfile?.preferred_source_language_id) {
+                profileUpdate.preferred_source_language_id = languageIds.sourceLanguageId;
+            }
+            if (!existingProfile?.preferred_target_language_id) {
+                profileUpdate.preferred_target_language_id = languageIds.targetLanguageId;
+            }
+        }
+        if (Object.keys(profileUpdate).length > 1 || !existingProfile) {
+            const { error } = await supabase
+                .from('profiles')
+                .upsert(profileUpdate, { onConflict: 'id' });
+            if (error)
+                throw error;
+        }
+        const { data: profile, error: refreshedProfileError } = await supabase
+            .from('profiles')
+            .select('preferred_source_language_id, preferred_target_language_id')
+            .eq('id', user.id)
+            .maybeSingle();
+        if (refreshedProfileError)
+            throw refreshedProfileError;
+        const languageIds = [
+            profile?.preferred_source_language_id,
+            profile?.preferred_target_language_id
+        ].filter((id) => Boolean(id));
+        if (!languageIds.length)
+            return;
+        const { data: languages, error: languagesError } = await supabase
+            .from('supported_languages')
+            .select('id, code')
+            .in('id', languageIds);
+        if (languagesError)
+            throw languagesError;
+        const languageNameById = new Map((languages || []).map((language) => [
+            language.id,
+            Object.keys(languageDatabaseCodes)
+                .find((name) => languageDatabaseCodes[name] === language.code)
+        ]));
+        const preferredSource = profile?.preferred_source_language_id
+            ? languageNameById.get(profile.preferred_source_language_id)
+            : undefined;
+        const preferredTarget = profile?.preferred_target_language_id
+            ? languageNameById.get(profile.preferred_target_language_id)
+            : undefined;
+        if (preferredSource && sourceLanguageSelect)
+            sourceLanguageSelect.value = preferredSource;
+        if (preferredTarget && targetLanguageSelect)
+            targetLanguageSelect.value = preferredTarget;
+        updateLanguageBadges();
+    }
     function openAuthModal(mode = 'login') {
         if (!authModal || !authModalOverlay)
             return;
@@ -1027,7 +1235,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Open/Close triggers
     if (openAuthBtn) {
-        openAuthBtn.addEventListener('click', () => openAuthModal('login'));
+        openAuthBtn.addEventListener('click', async () => {
+            if (!currentUser) {
+                openAuthModal('login');
+                return;
+            }
+            try {
+                const { error } = await supabase.auth.signOut();
+                if (error)
+                    throw error;
+            }
+            catch (error) {
+                showLiveAlert('info', 'Sign out failed', error instanceof Error ? error.message : String(error));
+            }
+        });
     }
     if (drawerSignInBtn) {
         drawerSignInBtn.addEventListener('click', () => {
@@ -1176,20 +1397,32 @@ document.addEventListener('DOMContentLoaded', () => {
         return Object.keys(errors).length === 0;
     }
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             clearAuthStatus();
             const isValid = validateLogin();
             if (!isValid)
                 return;
-            // Update state without logging sensitive credentials
+            const email = loginEmail.value.trim();
+            const password = loginPassword.value;
             state.authUI.loginForm = {
-                email: loginEmail.value.trim(),
-                password: '', // Kept empty in state for security
+                email,
+                password: '',
                 rememberMe: loginRememberMe ? loginRememberMe.checked : false
             };
-            // Rule: Do NOT pretend authentication is real. Show explicit message.
-            showAuthStatus('Authentication is not connected yet. This frontend demo validated your inputs without creating an active session.', 'info');
+            try {
+                const { error } = await supabase.auth.signInWithPassword({ email, password });
+                if (error)
+                    throw error;
+                closeAuthModal();
+            }
+            catch (error) {
+                showAuthStatus(error instanceof Error ? error.message : String(error), 'error');
+            }
+            finally {
+                loginPassword.value = '';
+                state.authUI.loginForm.password = '';
+            }
         });
     }
     // -------------------------------------------------------------------------
@@ -1248,23 +1481,56 @@ document.addEventListener('DOMContentLoaded', () => {
         return Object.keys(errors).length === 0;
     }
     if (signupForm) {
-        signupForm.addEventListener('submit', (e) => {
+        signupForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             clearAuthStatus();
             const isValid = validateSignup();
             if (!isValid)
                 return;
-            // Update state without logging sensitive credentials
+            const fullName = signupName.value.trim();
+            const email = signupEmail.value.trim();
+            const password = signupPassword.value;
+            const preferredSourceLang = signupSourceLang.value;
+            const preferredTargetLang = signupTargetLang.value;
             state.authUI.signupForm = {
-                fullName: signupName.value.trim(),
-                email: signupEmail.value.trim(),
+                fullName,
+                email,
                 password: '',
                 confirmPassword: '',
-                preferredSourceLang: signupSourceLang.value,
-                preferredTargetLang: signupTargetLang.value
+                preferredSourceLang,
+                preferredTargetLang
             };
-            // Rule: Do NOT pretend authentication is real. Show explicit message.
-            showAuthStatus('Authentication is not connected yet. Your registration and language preferences were validated successfully in this frontend demo.', 'info');
+            try {
+                const { data, error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                    options: {
+                        data: {
+                            full_name: fullName,
+                            preferred_source_language: databaseLanguageCode(preferredSourceLang),
+                            preferred_target_language: databaseLanguageCode(preferredTargetLang)
+                        }
+                    }
+                });
+                if (error)
+                    throw error;
+                if (data.session && data.user) {
+                    await saveProfilePreferences(data.user.id, preferredSourceLang, preferredTargetLang, fullName);
+                    closeAuthModal();
+                }
+                else {
+                    showAuthStatus('Account created. Check your email to confirm your address before signing in.', 'info');
+                }
+            }
+            catch (error) {
+                showAuthStatus(error instanceof Error ? error.message : String(error), 'error');
+            }
+            finally {
+                signupPassword.value = '';
+                signupConfirmPassword.value = '';
+                state.authUI.signupForm.password = '';
+                state.authUI.signupForm.confirmPassword = '';
+            }
         });
     }
     // =========================================================================
@@ -1273,6 +1539,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.LiveIndicTranslator = {
         state,
         loadHistoryList,
+        createTranslationSession,
+        finishTranslationSession,
         openSessionDetails,
         showLiveAlert,
         dismissLiveAlert,
@@ -1286,7 +1554,64 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCharCounts();
     updateHistoryCountBadge();
     setStatus('ready');
-    // Automatically open the Login modal on initial page load
-    openAuthModal('login');
+    supabase.auth.onAuthStateChange((event, session) => {
+        const previousUserId = currentUser?.id || null;
+        currentUser = session?.user || null;
+        if (previousUserId !== (currentUser?.id || null)) {
+            state.historyList = [];
+            state.sessionDetail = null;
+            historyLoadedForUserId = null;
+            if (historyItemsContainer)
+                historyItemsContainer.innerHTML = '';
+            showHistoryListView();
+        }
+        updateAccountUI(currentUser);
+        if (currentUser) {
+            closeAuthModal();
+            const changedUser = currentUser;
+            window.setTimeout(() => {
+                if (currentUser?.id !== changedUser.id)
+                    return;
+                const shouldHydrateProfile = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
+                const refreshHistory = async () => {
+                    if (shouldHydrateProfile) {
+                        await hydrateUserProfile(changedUser);
+                    }
+                    await loadHistoryList();
+                };
+                void refreshHistory().catch((error) => {
+                    showLiveAlert('info', 'Profile or history sync failed', error instanceof Error ? error.message : String(error));
+                });
+            }, 0);
+        }
+        else {
+            state.historyList = [];
+            state.sessionDetail = null;
+            historyLoadedForUserId = null;
+            if (historyItemsContainer)
+                historyItemsContainer.innerHTML = '';
+            showHistoryListView();
+            updateHistoryCountBadge();
+            void loadHistoryList();
+        }
+    });
+    void (async () => {
+        try {
+            const { data, error } = await supabase.auth.getSession();
+            if (error)
+                throw error;
+            currentUser = data.session?.user || null;
+            updateAccountUI(currentUser);
+            if (currentUser) {
+                closeAuthModal();
+                await hydrateUserProfile(currentUser);
+                await loadHistoryList();
+            }
+        }
+        catch (error) {
+            currentUser = null;
+            updateAccountUI(null);
+            showLiveAlert('info', 'Authentication status unavailable', error instanceof Error ? error.message : String(error));
+        }
+    })();
 });
-export {};
