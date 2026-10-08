@@ -170,8 +170,7 @@ async def websocket_endpoint(websocket: WebSocket):
             use_sarvam_asr = (current_source_lang == 'ml')
             
             if use_sarvam_asr:
-                sarvam_lang = lang_map.get(current_source_lang, "ml-IN")
-                ws_url = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code={sarvam_lang}&model=saaras:v4"
+                ws_url = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code=ml-IN&model=saaras:v4"
                 headers = {"api-subscription-key": SARVAM_API_KEY}
             else:
                 deepgram_model = "nova-3" if current_source_lang in DRAVIDIAN_LANGUAGES else "nova-2"
