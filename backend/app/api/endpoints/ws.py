@@ -66,16 +66,25 @@ async def websocket_translate(websocket: WebSocket):
 
     except WebSocketDisconnect:
         if not finalized:
-            await orchestrator.finalize()
-            await persistence_queue.queue.join()
+            try:
+                await orchestrator.finalize()
+                await persistence_queue.queue.join()
+            except Exception:
+                pass
     except Exception as e:
-        if websocket.client_state.value != 3:
+        logger.exception("WebSocket error")
+        try:
             await websocket.send_json({"type": "error", "message": str(e)})
             await websocket.close()
+        except RuntimeError:
+            pass # Already closed
     finally:
         try:
             await asr_service.close()
         except Exception:
             logger.exception("Failed to close ASR provider")
-        if websocket.client_state.value != 3:
+        
+        try:
             await websocket.close()
+        except RuntimeError:
+            pass # Already closed
