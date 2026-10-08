@@ -78,20 +78,15 @@
             <span class="lang-dot source-dot"></span> Source Language (Speaking)
           </label>
           <div class="select-wrapper">
-            <select id="sourceLanguage" class="custom-select">
+            <select id="sourceLanguage" class="custom-select" disabled title="Currently locked to English speech input for MVP">
               <option value="English" selected>English</option>
-              <option value="Tamil">Tamil (தமிழ்)</option>
-              <option value="Hindi">Hindi (हिन्दी)</option>
-              <option value="Telugu">Telugu (తెలుగు)</option>
-              <option value="Kannada">Kannada (ಕನ್ನಡ)</option>
-              <option value="Malayalam">Malayalam (മലയാളം)</option>
             </select>
             <span class="select-arrow">▼</span>
           </div>
         </div>
 
         <div class="swap-action-col">
-          <button id="swapLanguagesBtn" class="swap-btn" title="Swap languages" aria-label="Swap source and target languages">
+          <button id="swapLanguagesBtn" class="swap-btn" disabled title="Swapping disabled (English only input for MVP)" aria-label="Swap source and target languages" style="opacity: 0.5; cursor: not-allowed;">
             <svg class="swap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="m16 3 4 4-4 4"/>
               <path d="M20 7H4"/>
