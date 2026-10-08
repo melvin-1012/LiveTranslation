@@ -60,7 +60,7 @@ class SarvamASRService(ASRService):
         try:
             self.ws = await websockets.connect(
                 uri,
-                extra_headers={"api-subscription-key": self.api_key}
+                additional_headers={"api-subscription-key": self.api_key}
             )
             self.is_connected = True
             self.receive_task = asyncio.create_task(self._receive_loop())
