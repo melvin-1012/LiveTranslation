@@ -3,12 +3,28 @@
 -- Create extension for pgcrypto if needed (gen_random_uuid is built-in for modern PG)
 
 -- ==========================================
--- 1. profiles & auth integration
+-- 1. supported_languages
+-- ==========================================
+CREATE TABLE IF NOT EXISTS public.supported_languages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    native_name TEXT,
+    is_indic BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+ALTER TABLE public.supported_languages ENABLE ROW LEVEL SECURITY;
+
+-- ==========================================
+-- 2. profiles & auth integration
 -- ==========================================
 CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     display_name TEXT,
     email TEXT,
+    preferred_source_language_id UUID REFERENCES public.supported_languages(id) ON DELETE SET NULL,
+    preferred_target_language_id UUID REFERENCES public.supported_languages(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -51,20 +67,6 @@ BEGIN
         FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
     END IF;
 END $$;
-
--- ==========================================
--- 2. supported_languages
--- ==========================================
-CREATE TABLE IF NOT EXISTS public.supported_languages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    native_name TEXT,
-    is_indic BOOLEAN DEFAULT false,
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-ALTER TABLE public.supported_languages ENABLE ROW LEVEL SECURITY;
 
 -- ==========================================
 -- 3. translation_sessions
