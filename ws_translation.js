@@ -59,6 +59,17 @@ document.addEventListener('DOMContentLoaded', () => {
             app.showLiveAlert('connection-error', title, message);
         }
 
+        function describeError(error) {
+            if (error instanceof Error) return error.message;
+            if (error && typeof error === 'object') {
+                const parts = [error.message, error.details, error.hint]
+                    .filter((part) => typeof part === 'string' && part.length > 0);
+                if (typeof error.code === 'string') parts.push(`Code: ${error.code}`);
+                if (parts.length) return parts.join(' ');
+            }
+            return typeof error === 'string' ? error : 'An unexpected error occurred.';
+        }
+
         function updateTextPanels() {
             sourceTranscript.value = baseSource + currentSource;
             sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
@@ -91,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (error) {
                     reportError(
                         'Could not save session status',
-                        error instanceof Error ? error.message : String(error)
+                        describeError(error)
                     );
                 }
             }
@@ -219,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 await completeSession();
                 reportError(
                     'Could not start translation',
-                    error instanceof Error ? error.message : String(error)
+                    describeError(error)
                 );
             }
         }

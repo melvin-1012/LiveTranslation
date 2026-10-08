@@ -525,11 +525,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function finishTranslationSession(sessionId: string): Promise<void> {
     if (!currentUser) return;
+    const userId = currentUser.id;
+    const { data: session, error: sessionError } = await supabase
+      .from('translation_sessions')
+      .select('started_at')
+      .eq('id', sessionId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (sessionError) throw sessionError;
+    if (!session?.started_at) {
+      throw new Error('Translation session was not found for the signed-in user.');
+    }
+
+    const startedAt = Date.parse(session.started_at);
+    if (!Number.isFinite(startedAt)) {
+      throw new Error('The translation session has an invalid start time.');
+    }
+    const endedAt = new Date(Math.max(Date.now(), startedAt + 1000)).toISOString();
     const { error } = await supabase
       .from('translation_sessions')
-      .update({ status: 'completed', ended_at: new Date().toISOString() })
+      .update({ status: 'completed', ended_at: endedAt })
       .eq('id', sessionId)
-      .eq('user_id', currentUser.id);
+      .eq('user_id', userId);
     if (error) throw error;
     if (historyDrawer?.classList.contains('open')) await loadHistoryList();
   }
