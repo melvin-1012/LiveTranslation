@@ -1,44 +1,64 @@
-from app.services.supabase_client import get_supabase
-from app.models.schemas import *
+
+from supabase import Client
 from typing import List, Dict, Any
+import logging
 
-db = get_supabase()
+logger = logging.getLogger(__name__)
 
-def create_session(data: CreateSession) -> Dict[str, Any]:
-    # Placeholder for database call
-    # result = db.table('translation_sessions').insert(data.model_dump()).execute()
-    # return result.data[0]
-    pass
+def create_session(db: Client, user_id: str, mode: str, src_lang: str = None, tgt_lang: str = None) -> Dict[str, Any]:
+    data = {"user_id": user_id, "mode": mode}
+    if src_lang: data["source_language_id"] = src_lang
+    if tgt_lang: data["target_language_id"] = tgt_lang
+    res = db.table('translation_sessions').insert(data).execute()
+    return res.data[0]
 
-def end_session(session_id: str, data: EndSession) -> Dict[str, Any]:
-    # result = db.table('translation_sessions').update({"status": data.status, "ended_at": "now()"}).eq('id', session_id).execute()
-    pass
+def end_session(db: Client, session_id: str, status: str = 'completed') -> Dict[str, Any]:
+    res = db.table('translation_sessions').update({"status": status, "ended_at": "now()"}).eq('id', session_id).execute()
+    return res.data[0] if res.data else {}
 
-def create_utterance(session_id: str, data: CreateUtterance) -> Dict[str, Any]:
-    # result = db.table('utterances').insert({"session_id": session_id, **data.model_dump()}).execute()
-    pass
+def get_sessions(db: Client) -> List[Dict[str, Any]]:
+    # RLS restricts this to the user's sessions automatically
+    res = db.table('translation_sessions').select('*').execute()
+    return res.data
 
-def create_segment(utterance_id: str, segment_data: dict) -> Dict[str, Any]:
-    # result = db.table('utterance_segments').insert({"utterance_id": utterance_id, **segment_data}).execute()
-    pass
+def get_session_details(db: Client, session_id: str) -> Dict[str, Any]:
+    res = db.table('translation_sessions').select('*').eq('id', session_id).execute()
+    if not res.data: return None
+    return res.data[0]
 
-def store_asr_result(utterance_id: str, data: ASRResult) -> Dict[str, Any]:
-    # result = db.table('asr_results').insert({"utterance_id": utterance_id, **data.model_dump()}).execute()
-    pass
+def create_utterance(db: Client, session_id: str, sequence_number: int) -> Dict[str, Any]:
+    res = db.table('utterances').insert({"session_id": session_id, "sequence_number": sequence_number}).execute()
+    return res.data[0]
 
-def store_translation_result(utterance_id: str, data: TranslationResult) -> Dict[str, Any]:
-    # result = db.table('translation_results').insert({"utterance_id": utterance_id, **data.model_dump()}).execute()
-    pass
+def store_asr_result(db: Client, utterance_id: str, model_name: str, transcript: str, is_final: bool) -> Dict[str, Any]:
+    res = db.table('asr_results').insert({
+        "utterance_id": utterance_id, 
+        "model_name": model_name, 
+        "transcript": transcript
+    }).execute()
+    return res.data[0]
 
-def store_translation_metrics(translation_result_id: str, data: TranslationMetrics) -> Dict[str, Any]:
-    # result = db.table('translation_metrics').insert({"translation_result_id": translation_result_id, **data.model_dump()}).execute()
-    pass
+def store_translation_result(db: Client, utterance_id: str, model_name: str, translated_text: str, version_number: int, is_final: bool) -> Dict[str, Any]:
+    # upsert could be used but we rely on UNIQUE constraint and version increments for append-only log
+    res = db.table('translation_results').insert({
+        "utterance_id": utterance_id,
+        "model_name": model_name,
+        "translated_text": translated_text,
+        "translation_status": "final" if is_final else "partial",
+        "is_final": is_final,
+        "version_number": version_number
+    }).execute()
+    return res.data[0]
 
-def get_sessions(user_id: str) -> List[Dict[str, Any]]:
-    # result = db.table('session_history_view').select('*').eq('user_id', user_id).execute()
-    pass
+def store_translation_metrics(db: Client, translation_result_id: str, metrics: dict) -> Dict[str, Any]:
+    # translation_result_id is the fk to translation_results(id)
+    # Wait, utterance_id is not translation_result_id. We need the actual trans id.
+    res = db.table('translation_metrics').insert({
+        "translation_result_id": translation_result_id,
+        **metrics
+    }).execute()
+    return res.data[0]
 
-def get_session_details(session_id: str) -> Dict[str, Any]:
-    # session = db.table('session_history_view').select('*').eq('session_id', session_id).execute()
-    # performance = db.table('translation_performance_view').select('*').eq('session_id', session_id).execute()
-    pass
+def get_session_history(db: Client, user_id: str):
+    res = db.table('session_history_view').select('*').eq('user_id', user_id).execute()
+    return res.data

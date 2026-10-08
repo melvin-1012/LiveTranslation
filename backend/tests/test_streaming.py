@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+import uuid
+from unittest.mock import patch
 from app.core.state import StreamingState, is_valid_transition
 from app.core.metrics import TranslationMetricsTracker
 from app.services.streaming_orchestrator import StreamingOrchestrator, MockASRService, MockTranslationService
@@ -18,11 +20,14 @@ async def test_state_transitions():
     assert not is_valid_transition(StreamingState.UTTERANCE_STARTED, StreamingState.TRANSLATION_FINAL)
 
 @pytest.mark.asyncio
-async def test_streaming_orchestrator_flow():
+@patch("app.services.streaming_orchestrator.create_utterance")
+@patch("app.services.streaming_orchestrator.get_supabase_client")
+async def test_streaming_orchestrator_flow(mock_get_db, mock_create):
+    mock_create.return_value = {"id": str(uuid.uuid4())}
     ws = MockWebSocket()
     orchestrator = StreamingOrchestrator(MockASRService(), MockTranslationService(), ws)
     
-    await orchestrator.handle_config({"session_id": "1", "source_language": "en", "target_language": "ta"})
+    await orchestrator.handle_config({"session_id": str(uuid.uuid4()), "source_language": "en", "target_language": "ta"})
     assert orchestrator.state is None
     
     await orchestrator.process_audio(b"fake audio chunk")

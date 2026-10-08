@@ -3,7 +3,6 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class CreateSession(BaseModel):
-    user_id: str
     source_language_id: Optional[str] = None
     target_language_id: Optional[str] = None
     mode: str = "one_way"
