@@ -16,62 +16,124 @@
   </div>
 
   <div class="app-container">
-    <!-- Header Section -->
-    <header class="app-header">
-      <div class="badge-wrapper">
+    <!-- Top Navigation / Account Bar -->
+    <nav class="app-top-nav">
+      <div class="nav-left">
         <span class="hackathon-badge">
           <span class="pulse-sparkle"></span>
           AI Speech Engine • Prototype
         </span>
       </div>
+
+      <div class="nav-right">
+        <!-- History Navigation Button -->
+        <button id="historyToggleBtn" class="nav-action-btn" aria-label="Open Translation History" title="View translation history">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 14 14"/>
+          </svg>
+          <span>History</span>
+          <span class="history-count-badge" id="historyCountBadge">4</span>
+        </button>
+
+        <!-- Account Area in Header -->
+        <div class="account-area" id="accountArea">
+          <div class="account-signin-card" title="Sign in is required to sync personal history across sessions">
+            <svg class="account-user-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <span class="account-signin-text">Sign in to view your history</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Header Section -->
+    <header class="app-header">
       <h1 class="app-title">LiveIndic<span class="gradient-text">Translator</span></h1>
       <p class="app-subtitle">Real-time speech translation for Indic languages</p>
     </header>
 
-    <!-- Language Selection Bar -->
+    <!-- Live Session Alert / Error Notification Area -->
+    <div id="liveAlertBox" class="live-alert-box hidden" role="alert" aria-live="polite">
+      <div class="alert-icon-wrap" id="alertIconWrap">
+        <!-- Injected via JS based on alert type -->
+      </div>
+      <div class="alert-body">
+        <div class="alert-title" id="alertTitle">Notice</div>
+        <div class="alert-message" id="alertMessage">Message details will appear here.</div>
+      </div>
+      <div class="alert-actions">
+        <button id="alertActionBtn" class="alert-action-btn hidden">Action</button>
+        <button id="dismissAlertBtn" class="alert-dismiss-btn" aria-label="Dismiss alert">&times;</button>
+      </div>
+    </div>
+
+    <!-- Language Selection Card -->
     <section class="language-selection-card">
-      <div class="selector-col">
-        <label for="sourceLanguage" class="field-label">
-          <span class="lang-dot source-dot"></span> Source Language (Speaking)
-        </label>
-        <div class="select-wrapper">
-          <select id="sourceLanguage" class="custom-select">
-            <option value="English" selected>English</option>
-            <option value="Tamil">Tamil (தமிழ்)</option>
-            <option value="Hindi">Hindi (हिन्दी)</option>
-            <option value="Telugu">Telugu (తెలుగు)</option>
-            <option value="Kannada">Kannada (ಕನ್ನಡ)</option>
-            <option value="Malayalam">Malayalam (മലയാളം)</option>
-          </select>
-          <span class="select-arrow">▼</span>
+      <div class="lang-selectors-row">
+        <div class="selector-col">
+          <label for="sourceLanguage" class="field-label">
+            <span class="lang-dot source-dot"></span> Source Language (Speaking)
+          </label>
+          <div class="select-wrapper">
+            <select id="sourceLanguage" class="custom-select">
+              <option value="English" selected>English</option>
+              <option value="Tamil">Tamil (தமிழ்)</option>
+              <option value="Hindi">Hindi (हिन्दी)</option>
+              <option value="Telugu">Telugu (తెలుగు)</option>
+              <option value="Kannada">Kannada (ಕನ್ನಡ)</option>
+              <option value="Malayalam">Malayalam (മലയാളം)</option>
+            </select>
+            <span class="select-arrow">▼</span>
+          </div>
+        </div>
+
+        <div class="swap-action-col">
+          <button id="swapLanguagesBtn" class="swap-btn" title="Swap languages" aria-label="Swap source and target languages">
+            <svg class="swap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m16 3 4 4-4 4"/>
+              <path d="M20 7H4"/>
+              <path d="m8 21-4-4 4-4"/>
+              <path d="M4 17h16"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="selector-col">
+          <label for="targetLanguage" class="field-label">
+            <span class="lang-dot target-dot"></span> Target Language (Translation)
+          </label>
+          <div class="select-wrapper">
+            <select id="targetLanguage" class="custom-select">
+              <option value="English">English</option>
+              <option value="Tamil" selected>Tamil (தமிழ்)</option>
+              <option value="Hindi">Hindi (हिन्दी)</option>
+              <option value="Telugu">Telugu (తెలుగు)</option>
+              <option value="Kannada">Kannada (ಕನ್ನಡ)</option>
+              <option value="Malayalam">Malayalam (മലയാളം)</option>
+            </select>
+            <span class="select-arrow">▼</span>
+          </div>
         </div>
       </div>
 
-      <div class="swap-action-col">
-        <button id="swapLanguagesBtn" class="swap-btn" title="Swap languages" aria-label="Swap source and target languages">
-          <svg class="swap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m16 3 4 4-4 4"/>
-            <path d="M20 7H4"/>
-            <path d="m8 21-4-4 4-4"/>
-            <path d="M4 17h16"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="selector-col">
-        <label for="targetLanguage" class="field-label">
-          <span class="lang-dot target-dot"></span> Target Language (Translation)
-        </label>
-        <div class="select-wrapper">
-          <select id="targetLanguage" class="custom-select">
-            <option value="English">English</option>
-            <option value="Tamil" selected>Tamil (தமிழ்)</option>
-            <option value="Hindi">Hindi (हिन्दी)</option>
-            <option value="Telugu">Telugu (తెలుగు)</option>
-            <option value="Kannada">Kannada (ಕನ್ನಡ)</option>
-            <option value="Malayalam">Malayalam (മലയാളം)</option>
-          </select>
-          <span class="select-arrow">▼</span>
+      <!-- Language Preferences Action Bar -->
+      <div class="preferences-action-bar">
+        <div class="preferences-left">
+          <button id="savePreferencesBtn" class="btn-save-pref" title="Save chosen language pair">
+            <svg class="pref-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            <span>Save Preferences</span>
+          </button>
+          <span id="preferencesStatusBadge" class="pref-status-pill hidden"></span>
+        </div>
+        <div class="preferences-hint">
+          Current Pair: <strong id="currentPairHint">English → Tamil</strong>
         </div>
       </div>
     </section>
@@ -79,7 +141,7 @@
     <!-- Controls & Status Bar -->
     <section class="controls-status-bar">
       <div class="action-buttons-group">
-        <button id="startBtn" class="btn btn-primary" title="Start listening">
+        <button id="startBtn" class="btn btn-primary" title="Start listening to microphone">
           <svg class="btn-icon mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -133,7 +195,7 @@
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
-            <span class="latency-number" id="latencyDisplay">-- ms</span>
+            <span class="latency-number" id="latencyDisplay">—</span>
             <span class="latency-tag" id="latencyTag">IDLE</span>
           </div>
         </div>
@@ -246,6 +308,130 @@
       <p class="footer-note">LiveIndicTranslator • Built for Real-Time Multilingual Communication</p>
     </footer>
   </div>
+
+  <!-- History Drawer & Modal Component -->
+  <div id="historyDrawerOverlay" class="drawer-overlay" aria-hidden="true"></div>
+  
+  <aside id="historyDrawer" class="history-drawer" aria-labelledby="historyDrawerTitle" role="dialog" aria-modal="true" aria-hidden="true">
+    <!-- Drawer Header -->
+    <header class="drawer-header">
+      <div class="drawer-header-left">
+        <button id="historyBackBtn" class="drawer-nav-btn hidden" aria-label="Back to session list" title="Back to sessions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          <span>Back</span>
+        </button>
+        <h2 id="historyDrawerTitle" class="drawer-title">Translation History</h2>
+      </div>
+      <button id="historyCloseBtn" class="drawer-close-btn" aria-label="Close history drawer" title="Close drawer">&times;</button>
+    </header>
+
+    <!-- Drawer Content Area -->
+    <div class="drawer-body">
+      <!-- VIEW 1: History Sessions List -->
+      <div id="historyListView" class="drawer-view-section">
+        <!-- Drawer Notification for Account Requirement -->
+        <div class="drawer-account-banner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <span>Sign in to view your history across devices. Viewing mock demo sessions below.</span>
+        </div>
+
+        <!-- UI State: Loading -->
+        <div id="historyLoadingState" class="history-state-box hidden">
+          <div class="spinner"></div>
+          <p class="state-title">Loading translation history...</p>
+          <p class="state-subtitle">Fetching archived speech sessions</p>
+        </div>
+
+        <!-- UI State: Failed Loading / Error -->
+        <div id="historyErrorState" class="history-state-box history-state-error hidden">
+          <div class="state-icon-error">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+          </div>
+          <p class="state-title">Failed to load translation history</p>
+          <p class="state-subtitle" id="historyErrorMessage">Unable to retrieve stored session records.</p>
+          <button id="historyRetryBtn" class="btn btn-primary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+            </svg>
+            <span>Retry</span>
+          </button>
+        </div>
+
+        <!-- UI State: No Sessions / Empty -->
+        <div id="historyEmptyState" class="history-state-box hidden">
+          <div class="state-icon-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <p class="state-title">No translation sessions</p>
+          <p class="state-subtitle">Your completed live translation sessions will be cataloged here.</p>
+        </div>
+
+        <!-- UI State: Sessions List Container -->
+        <div id="historyItemsContainer" class="history-sessions-list">
+          <!-- Session cards rendered dynamically by app.js -->
+        </div>
+
+        <!-- Demo / Mock State Tester Bar -->
+        <div class="mock-testing-toolbar">
+          <span class="mock-toolbar-label">Demo Controls:</span>
+          <button id="btnSimulateEmpty" class="mock-pill-btn" title="Simulate empty history state">Empty State</button>
+          <button id="btnSimulateError" class="mock-pill-btn" title="Simulate failed loading state">Error State</button>
+          <button id="btnResetHistory" class="mock-pill-btn" title="Reset mock sessions">Reset</button>
+        </div>
+      </div>
+
+      <!-- VIEW 2: Session Detail View -->
+      <div id="sessionDetailView" class="drawer-view-section hidden">
+        <!-- Session Overview Card -->
+        <div class="session-detail-overview" id="sessionOverviewCard">
+          <!-- Overview metadata rendered via JS -->
+        </div>
+
+        <!-- Utterance Sequence -->
+        <div class="utterance-section-header">
+          <h3 class="utterance-section-title">Utterance Sequence</h3>
+          <span class="utterance-count-tag" id="utteranceCountTag">0 utterances</span>
+        </div>
+
+        <div id="sessionDetailLoading" class="history-state-box hidden">
+          <div class="spinner"></div>
+          <p class="state-title">Loading session details...</p>
+        </div>
+
+        <div id="sessionDetailError" class="history-state-box history-state-error hidden">
+          <p class="state-title">Session details unavailable</p>
+          <p class="state-subtitle">Unable to load speech and translation records.</p>
+          <button id="sessionDetailBackBtn" class="btn btn-secondary btn-sm">Return to sessions</button>
+        </div>
+
+        <div id="sessionDetailEmpty" class="history-state-box hidden">
+          <p class="state-title">No utterances recorded</p>
+          <p class="state-subtitle">This translation session contains no transcribed speech turns.</p>
+        </div>
+
+        <div id="utteranceSequenceContainer" class="utterance-list-container">
+          <!-- Utterance cards rendered dynamically by app.js -->
+        </div>
+      </div>
+    </div>
+  </aside>
 
   <script src="app.js"></script>
 </body>
