@@ -126,6 +126,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 except WebSocketDisconnect:
                     await message_queue.put({"type": "disconnect"})
                     break
+                    
+                if message.get("type") == "websocket.disconnect":
+                    await message_queue.put({"type": "disconnect"})
+                    break
                 
                 if "text" in message and message["text"]:
                     try:
