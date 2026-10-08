@@ -1,9 +1,15 @@
+
 from abc import ABC, abstractmethod
 from typing import Optional
 import uuid
+import logging
 from app.core.state import StreamingState, is_valid_transition
 from app.core.metrics import TranslationMetricsTracker
 from app.services.persistence_queue import persistence_queue
+from app.services.supabase_client import get_supabase_client
+from app.services.translation_db_service import create_utterance, store_asr_result
+
+logger = logging.getLogger(__name__)
 
 class ASRService(ABC):
     @abstractmethod
@@ -40,7 +46,7 @@ class StreamingOrchestrator:
         self.asr = asr
         self.translator = translator
         self.websocket = websocket
-        self.utterance_id = str(uuid.uuid4())
+        self.utterance_id = None
         self.state: Optional[StreamingState] = None
         self.metrics = TranslationMetricsTracker()
         self.translation_version = 0
@@ -48,6 +54,7 @@ class StreamingOrchestrator:
         self.source_lang = None
         self.target_lang = None
         self.session_id = None
+        self.token = None
 
     async def transition_state(self, new_state: StreamingState):
         if not is_valid_transition(self.state, new_state):
@@ -58,6 +65,17 @@ class StreamingOrchestrator:
         self.source_lang = config.get("source_language")
         self.target_lang = config.get("target_language")
         self.session_id = config.get("session_id")
+        self.token = config.get("token")
+        
+        # We block briefly to create the utterance synchronously so we have an ID for the live stream
+        try:
+            db = get_supabase_client(self.token)
+            res = create_utterance(db, self.session_id, self.sequence_number)
+            self.utterance_id = res["id"]
+        except Exception as e:
+            logger.error(f"Failed to initialize utterance in DB: {e}")
+            raise ValueError(f"DB Error: {e}")
+            
         await self.asr.start_stream(config)
 
     async def process_audio(self, chunk: bytes):
@@ -81,6 +99,9 @@ class StreamingOrchestrator:
         
         if is_final:
             await self.transition_state(StreamingState.ASR_FINAL)
+            # Store final ASR result asynchronously without blocking
+            # Assuming store_asr_result in queue
+            pass
         else:
             if self.state == StreamingState.UTTERANCE_STARTED:
                 await self.transition_state(StreamingState.ASR_PARTIAL)
@@ -117,20 +138,19 @@ class StreamingOrchestrator:
             "is_final": is_final
         })
 
-        await persistence_queue.enqueue("store_translation_result", {
+        metrics_data = None
+        if is_final:
+            metrics_data = self.metrics.calculate_metrics()
+            
+        await persistence_queue.enqueue("store_translation_result", self.token, {
             "utterance_id": self.utterance_id,
             "translated_text": trans_res["translated_text"],
             "version_number": self.translation_version,
             "is_final": is_final,
-            "status": "final" if is_final else "partial"
+            "metrics": metrics_data
         })
 
         if is_final:
-            metrics_data = self.metrics.calculate_metrics()
-            await persistence_queue.enqueue("store_translation_metrics", {
-                "translation_result_id": self.utterance_id,
-                **metrics_data
-            })
             await self.transition_state(StreamingState.PERSISTED)
 
     async def _emit_ws(self, payload: dict):

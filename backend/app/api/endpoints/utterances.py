@@ -1,25 +1,15 @@
-from fastapi import APIRouter
-from app.models.schemas import CreateUtterance, ASRResult, TranslationResult, TranslationMetrics
+
+from fastapi import APIRouter, Depends, HTTPException
+from app.models.schemas import CreateUtterance
 from app.services import translation_db_service
+from app.api.deps import get_db, get_current_user
+from supabase import Client
 
 router = APIRouter()
 
-@router.post("")
-def create_utterance(session_id: str, data: CreateUtterance):
-    # return translation_db_service.create_utterance(session_id, data)
-    return {"status": "placeholder"}
-
-@router.post("/{utterance_id}/asr")
-def store_asr(utterance_id: str, data: ASRResult):
-    # return translation_db_service.store_asr_result(utterance_id, data)
-    return {"status": "placeholder"}
-
-@router.post("/{utterance_id}/translations")
-def store_translation(utterance_id: str, data: TranslationResult):
-    # return translation_db_service.store_translation_result(utterance_id, data)
-    return {"status": "placeholder"}
-
-@router.post("/{translation_id}/metrics")
-def store_metrics(translation_id: str, data: TranslationMetrics):
-    # return translation_db_service.store_translation_metrics(translation_id, data)
-    return {"status": "placeholder"}
+@router.post("/{session_id}/utterances", response_model=dict)
+def create_utterance(session_id: str, data: CreateUtterance, db: Client = Depends(get_db), user_id: str = Depends(get_current_user)):
+    try:
+        return translation_db_service.create_utterance(db, session_id, data.sequence_number)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

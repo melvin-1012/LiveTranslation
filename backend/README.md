@@ -1,52 +1,78 @@
-# Live Translation Backend Architecture
+# HACKNEX 2026 EPS03 - Live Translation Backend
 
-This directory contains the FastAPI backend for the HackNEX 2026 EPS03 Live Translation system. It is designed to act as the real-time orchestrator between client microphones, ASR/Translation models, and the Supabase persistence layer.
+This is the FastAPI backend for the Live Translation project. It integrates seamlessly with Supabase for persistent storage, authentication, and live tracking.
 
-## FastAPI → Supabase Architecture
-The backend is fundamentally stateless during the streaming loop and offloads data persistence to Supabase PostgreSQL. Supabase is used strictly as an **asynchronous persistence layer**. 
-- **`app/api/endpoints/`**: Exposes the REST API for creating sessions, fetching history, and saving metrics.
-- **`app/services/translation_db_service.py`**: The Data Access layer. Encapsulates all calls to the Supabase client using the schemas defined in `app/models/schemas.py`.
+## Architecture & Persistence
 
-## Live Pipeline & Asynchronous Persistence
-**Crucial Rule**: Supabase must NOT block the live audio pipeline.
+The backend acts as an orchestrator and gateway between the user's audio input, the AI translation pipeline, and the Supabase PostgreSQL database.
 
-The intended live streaming flow is:
-`Microphone` -> `WebSocket/FastAPI` -> `ASR` -> `Translation` -> `Live Output`
+**Live Pipeline Flow:**
+`Audio Chunk -> ASR -> State Machine -> Translation -> WebSocket Emit -> Persistence Queue -> Supabase`
 
-During this loop, the `StreamingOrchestrator` (`app/services/streaming_orchestrator.py`) handles the rapid chunking. Database persistence is handled **asynchronously**:
-- We only save stable checkpoints (e.g. `translation_status = 'partial'`).
-- We avoid executing blocking DB writes for every single token.
+The architecture guarantees that database writes do NOT block the WebSocket streaming connection. All DB inserts are enqueued in a `PersistenceQueue` handled by an async background worker. If Supabase goes down, the background worker logs the error, but the live audio and translation streams will continue without interruption.
 
-## Endpoint Responsibilities
-The API is structured to decouple the streaming flow from historical persistence:
-- **`POST /sessions`**: Initialize a translation session.
-- **`POST /sessions/{id}/utterances`**: Mark the start of a new spoken utterance.
-- **`POST /utterances/{id}/asr`**: Store the final transcription.
-- **`POST /utterances/{id}/translations`**: Store translation checkpoints and the final text.
-- **`POST /translations/{id}/metrics`**: Store latency and stability metrics.
+## Supabase & Local Setup
 
-## Metrics Flow
-The `TranslationMetricsTracker` (`app/core/metrics.py`) tracks precise timestamps:
-1. `mark_audio_received()`: Audio chunk arrives.
-2. `mark_asr_first()`: First STT token appears.
-3. `mark_translation_first()`: First translated token appears.
-4. `mark_translation_final()`: Translation is stable.
-5. `mark_output()`: Result is sent to frontend.
+### 1. Start Local Supabase
+Install Docker Desktop and the Supabase CLI, then run:
+```bash
+npx supabase start
+```
+This boots the local Postgres, PostgREST API, Auth, and Storage services. 
 
-It calculates `asr_latency_ms`, `time_to_first_translation_ms`, `final_translation_latency_ms`, and `end_to_end_latency_ms` and passes them to the database.
+### 2. Environment Variables
+Create a `.env` file in the `backend/` directory. You can obtain these keys by running `npx supabase status`.
 
-## Streaming State Machine
-The backend maintains the state of an utterance via `app.core.state.StreamingState`:
-- `UTTERANCE_STARTED`
-- `ASR_PARTIAL`
-- `TRANSLATION_PARTIAL`
-- `ASR_UPDATED`
-- `TRANSLATION_UPDATED`
-- `ASR_FINAL`
-- `TRANSLATION_FINAL`
-- `PERSISTED`
+```env
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_ANON_KEY=<your-anon-key>
+SUPABASE_KEY=<your-service-role-key> # Used strictly for admin bypassing/testing
+```
+*Note: Never commit your actual `.env` file or expose your `SUPABASE_KEY` to the frontend.*
 
-Partial translations are stored using `version_number` and `is_final=False` in the database to prevent duplicate row bloat while maintaining a history of corrections.
+### 3. Start FastAPI
+```bash
+cd backend
+python -m uvicorn app.main:app --reload
+```
 
-## Evaluation Flow
-The `evaluation_service.py` handles executing baseline models and our system against the datasets in Supabase. It fetches `evaluation_samples`, streams them through our `StreamingOrchestrator` to simulate live audio, collects the latencies, and calculates quality scores (BLEU, chrF) before writing to `evaluation_results`.
+## Authentication & RLS Behavior
+
+The backend adheres strictly to Supabase's Row Level Security (RLS). 
+- All protected REST endpoints require a standard `Authorization: Bearer <access_token>` header.
+- The `get_current_user` FastAPI dependency extracts this token and calls the Supabase Auth API to securely verify the user identity.
+- We do NOT trust the frontend to provide `user_id` in JSON bodies.
+- Instead of using the `service_role` key to write user data, the backend dynamically instantiates a user-bound `Client` and injects the Bearer token into PostgREST. This ensures that every insert/select query respects the PostgreSQL RLS policies defined in the `translation_sessions` and `glossary_terms` tables.
+
+## REST Endpoints
+
+- `POST /sessions` - Create a new session.
+- `GET /sessions` - Get all sessions belonging to the authenticated user.
+- `GET /sessions/{id}` - Get session details (restricted by RLS).
+- `PATCH /sessions/{id}/end` - Mark a session as completed.
+- `POST /sessions/{id}/utterances` - Create an utterance container.
+- `GET /glossary` - Fetch glossary terms restricted to the user and global languages.
+
+## WebSocket Endpoint
+
+- `ws://localhost:8000/ws/translate` - Streams binary audio chunks.
+  - The first message must be a JSON config containing: `{"session_id": "...", "source_language": "en", "target_language": "hi", "token": "..."}`.
+  - Subsequent messages can be binary audio bytes.
+  - The WebSocket emits structured JSON payloads representing state machine transitions (`asr_partial`, `translation_final`, etc.).
+
+## Testing
+
+The testing suite uses `pytest` and is divided into unit tests (mocked dependencies) and integration tests (hitting the live local Supabase DB).
+
+### Run Unit Tests
+```bash
+export PYTHONPATH="." # (Linux/Mac)
+$env:PYTHONPATH="."   # (Windows)
+pytest tests/test_streaming.py -v
+```
+
+### Run Integration Tests
+Integration tests require local Supabase to be running (`npx supabase start`).
+```bash
+pytest tests/test_integration.py -v -s
+```
