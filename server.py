@@ -145,8 +145,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         if "text_to_translate" in data:
                             txt = data["text_to_translate"]
 
-                            # All supported language pairs use Sarvam directly.
-                            translated = await translate_text_sarvam(txt, current_source_lang, current_target_lang)
+                            is_dravidian_source = current_source_lang in DRAVIDIAN_LANGUAGES
+                            is_dravidian_or_en_target = current_target_lang in DRAVIDIAN_LANGUAGES or current_target_lang == "en"
+                            
+                            if is_dravidian_source and is_dravidian_or_en_target:
+                                print(f"--> [Text] Routing to Sarvam Translate API")
+                                translated = await translate_text_sarvam(txt, current_source_lang, current_target_lang)
+                            else:
+                                print(f"--> [Text] Routing to Google Translate API")
+                                translated = await translate_text_google(txt, current_target_lang)
 
                             payload = {
                                 "status": "success",
@@ -222,10 +229,18 @@ async def websocket_endpoint(websocket: WebSocket):
                                     if is_final:
                                         print(f"Final Transcript ({current_source_lang}): {transcript}")
 
-                                        # All supported language pairs use Sarvam directly.
-                                        print("--> Routing to Sarvam Translate API")
-                                        translated = await translate_text_sarvam(transcript, current_source_lang, current_target_lang)
-                                        provider = "sarvam"
+                                        # Intelligent Translation Routing
+                                        is_dravidian_source = current_source_lang in DRAVIDIAN_LANGUAGES
+                                        is_dravidian_or_en_target = current_target_lang in DRAVIDIAN_LANGUAGES or current_target_lang == "en"
+                                        
+                                        if is_dravidian_source and is_dravidian_or_en_target:
+                                            print(f"--> Routing to Sarvam Translate API (Dravidian Match)")
+                                            translated = await translate_text_sarvam(transcript, current_source_lang, current_target_lang)
+                                            provider = "sarvam"
+                                        else:
+                                            print(f"--> Routing to Google Translate API")
+                                            translated = await translate_text_google(transcript, current_target_lang)
+                                            provider = "google"
 
                                         # Database Save
                                         utterance_sequence += 1
