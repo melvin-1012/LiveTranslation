@@ -25,6 +25,10 @@ BEGIN
     END IF;
 END $$;
 
+-- Default session status to 'active'
+ALTER TABLE public.translation_sessions
+    ALTER COLUMN status SET DEFAULT 'active';
+
 -- ==============================================================================
 -- 2. ASR RESULTS HARDENING (asr_results)
 -- Distinguishes ASR Error vs Translation Error and tracks partial/final states
@@ -73,7 +77,8 @@ END $$;
 -- Captures confidence along with latency, stability, and rewrite counts
 -- ==============================================================================
 ALTER TABLE public.translation_metrics
-    ADD COLUMN IF NOT EXISTS confidence NUMERIC(5,4);
+    ADD COLUMN IF NOT EXISTS confidence NUMERIC(5,4),
+    ADD COLUMN IF NOT EXISTS final_translation_latency_ms INTEGER;
 
 DO $$
 BEGIN
@@ -291,9 +296,15 @@ END $$;
 -- 11. DATABASE VIEWS (Security Invoker Enabled)
 -- ==============================================================================
 
+-- Drop existing views first to allow updated column layouts in Postgres
+DROP VIEW IF EXISTS public.system_vs_baseline_comparison_view CASCADE;
+DROP VIEW IF EXISTS public.language_pair_performance_view CASCADE;
+DROP VIEW IF EXISTS public.translation_performance_view CASCADE;
+DROP VIEW IF EXISTS public.session_history_view CASCADE;
+
 -- View 1: Session History View
 -- Enforces RLS via security_invoker = true; provides language codes and utterance counts
-CREATE OR REPLACE VIEW public.session_history_view WITH (security_invoker = true) AS
+CREATE VIEW public.session_history_view WITH (security_invoker = true) AS
 SELECT 
     s.id AS session_id,
     s.user_id,

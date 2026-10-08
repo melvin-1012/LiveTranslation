@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 def create_session(db: Client, user_id: str, mode: str, src_lang: str = None, tgt_lang: str = None) -> Dict[str, Any]:
-    data = {"user_id": user_id, "mode": mode}
+    data = {"user_id": user_id, "mode": mode, "status": "active"}
     if src_lang: data["source_language_id"] = src_lang
     if tgt_lang: data["target_language_id"] = tgt_lang
     res = db.table('translation_sessions').insert(data).execute()

@@ -21,3 +21,8 @@ Thumbs.db
 
 # Test/cache
 .pytest_cache/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+
