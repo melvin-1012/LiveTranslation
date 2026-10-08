@@ -34,7 +34,9 @@ def store_asr_result(db: Client, utterance_id: str, model_name: str, transcript:
     res = db.table('asr_results').insert({
         "utterance_id": utterance_id, 
         "model_name": model_name, 
-        "transcript": transcript
+        "transcript": transcript,
+        "is_final": is_final,
+        "asr_status": "final" if is_final else "partial"
     }).execute()
     return res.data[0]
 

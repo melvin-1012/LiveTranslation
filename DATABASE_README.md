@@ -228,57 +228,42 @@ const { data: details } = await supabase
 
 ## 8. Backend / Orchestrator Integration Contract
 
-The FastAPI backend interacts with Supabase using the Service Role Key for asynchronous persistence:
+The FastAPI backend acts as an orchestrator between client audio input, the translation engine, and Supabase. It supports two complementary database access patterns:
+
+#### A. User-Scoped RLS Operations (REST Endpoints)
+Protected endpoints (`/sessions`, `/utterances`, `/glossary`) enforce Supabase RLS directly. The backend extracts the user's JWT from `Authorization: Bearer <token>` and injects it into a user-scoped `Client` (`get_supabase_client(token)`). PostgreSQL automatically enforces row isolation (e.g. `auth.uid() = user_id`) without trusting the client to supply `user_id`.
 
 ```python
-# 1. Start Session
-session = db.table('translation_sessions').insert({
-    "user_id": user_id,
-    "source_language_id": src_id,
-    "target_language_id": tgt_id,
-    "mode": "one_way",
-    "status": "active"
-}).execute()
+# REST Handler: Uses authenticated user-bound Supabase client
+@router.post("/sessions")
+def create_new_session(payload: CreateSession, user=Depends(get_current_user), db=Depends(get_db)):
+    # db is bound to the user's JWT; RLS verifies session ownership
+    return create_session(db, user_id=user.id, mode=payload.mode,
+                          src_lang=payload.source_language_id,
+                          tgt_lang=payload.target_language_id)
+```
 
-# 2. Persist Utterance (on speech boundary detected by VAD)
-utterance = db.table('utterances').insert({
-    "session_id": session_id,
-    "sequence_number": seq_no,
-    "source_text": text,
-    "is_code_mixed": code_mixed_flag,
-    "confidence": confidence_val
-}).execute()
+#### B. Asynchronous Persistence Queue (WebSocket Audio Streaming)
+To ensure that database writes **never block the live audio loop or WebSocket frame emissions**, streaming events are pushed into an asynchronous `PersistenceQueue` worker:
 
-# 3. Store ASR Checkpoint
-db.table('asr_results').insert({
+```python
+# Live Streaming Flow: Non-blocking async queue
+# 1. State machine marks ASR & Translation checkpoints
+# 2. Emits payload immediately over WebSocket to client
+# 3. Enqueues persistence task in background worker:
+await persistence_queue.enqueue("store_translation_result", token, {
     "utterance_id": utterance_id,
-    "model_name": "Deepgram-Nova-2",
-    "transcript": asr_transcript,
-    "is_final": is_final,
-    "asr_status": "final" if is_final else "partial",
-    "confidence": 0.94
-}).execute()
-
-# 4. Store Progressive Translation Version (v1, v2, v3 final)
-trans = db.table('translation_results').insert({
-    "utterance_id": utterance_id,
-    "model_name": "IndicTrans2-LLM",
     "translated_text": translated_text,
-    "version_number": version_num,
+    "version_number": version_number,
     "is_final": is_final,
-    "translation_status": "final" if is_final else "partial",
-    "confidence": 0.95
-}).execute()
-
-# 5. Store Translation Metrics (on final translation)
-db.table('translation_metrics').insert({
-    "translation_result_id": trans.data[0]['id'],
-    "time_to_first_translation_ms": 380,
-    "end_to_end_latency_ms": 710,
-    "caption_rewrite_count": version_num - 1,
-    "caption_stability_score": 0.9650,
-    "confidence": 0.95
-}).execute()
+    "metrics": {
+        "time_to_first_translation_ms": 380,
+        "end_to_end_latency_ms": 710,
+        "caption_rewrite_count": version_number - 1,
+        "caption_stability_score": 0.9650,
+        "confidence": 0.95
+    }
+})
 ```
 
 ---
