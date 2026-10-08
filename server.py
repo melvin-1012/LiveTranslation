@@ -92,14 +92,25 @@ async def websocket_endpoint(websocket: WebSocket):
     
     if supabase_client:
         try:
-            supabase_client.table('translation_sessions').insert({
+            # The database expects UUIDs, not string codes like 'en'. We must look them up.
+            src_id, tgt_id = None, None
+            try:
+                src_res = supabase_client.table('supported_languages').select('id').eq('code', current_source_lang).execute()
+                if src_res.data: src_id = src_res.data[0]['id']
+                tgt_res = supabase_client.table('supported_languages').select('id').eq('code', current_target_lang).execute()
+                if tgt_res.data: tgt_id = tgt_res.data[0]['id']
+            except: pass
+            
+            session_data = {
                 "id": session_id,
-                "user_id": "hackathon_user", # Mock user since auth is frontend only right now
+                "user_id": "hackathon_user",
                 "mode": "live",
-                "status": "active",
-                "source_language_id": current_source_lang,
-                "target_language_id": current_target_lang
-            }).execute()
+                "status": "active"
+            }
+            if src_id: session_data["source_language_id"] = src_id
+            if tgt_id: session_data["target_language_id"] = tgt_id
+            
+            supabase_client.table('translation_sessions').insert(session_data).execute()
         except Exception as e:
             print(f"DB Error creating session: {e}")
 
@@ -158,8 +169,9 @@ async def websocket_endpoint(websocket: WebSocket):
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         
         while True:
-            # Omit model=nova-2 so Deepgram automatically routes to the latest model (e.g. Nova-3) that supports Dravidian languages
-            dg_url = f"wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&language={current_source_lang}"
+            # Deepgram nova-2 doesn't support Tamil/Telugu/etc. We must use nova-3 for Dravidian languages.
+            deepgram_model = "nova-3" if current_source_lang in DRAVIDIAN_LANGUAGES else "nova-2"
+            dg_url = f"wss://api.deepgram.com/v1/listen?model={deepgram_model}&encoding=linear16&sample_rate=16000&language={current_source_lang}"
             
             try:
                 async with ws_client.connect(dg_url, additional_headers=headers) as deepgram_ws:
