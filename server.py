@@ -216,9 +216,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                 is_final = False
                                 
                                 if use_sarvam_asr:
+                                    # DEBUG: print the raw event
+                                    print(f"[Sarvam ASR Event]: {response_json.get('event')}")
                                     if response_json.get("event") == "transcript":
                                         transcript = response_json.get("text", "")
                                         is_final = response_json.get("is_final", False)
+                                        print(f"[Sarvam ASR] Transcript: '{transcript}' Final: {is_final}")
                                 else:
                                     is_final = response_json.get("is_final", False)
                                     alternatives = response_json.get("channel", {}).get("alternatives", [])
