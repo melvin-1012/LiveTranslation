@@ -1,14 +1,21 @@
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import json
-from app.services.streaming_orchestrator import StreamingOrchestrator, MockASRService, MockTranslationService
+from app.services.streaming_orchestrator import StreamingOrchestrator, get_provider_factory
 
 router = APIRouter()
 
 @router.websocket("/translate")
 async def websocket_translate(websocket: WebSocket):
     await websocket.accept()
-    asr_service = MockASRService()
-    trans_service = MockTranslationService()
+    
+    try:
+        asr_service, trans_service = get_provider_factory()
+    except Exception as e:
+        await websocket.send_json({"type": "error", "message": f"Provider init error: {str(e)}"})
+        await websocket.close()
+        return
+
     orchestrator = StreamingOrchestrator(asr_service, trans_service, websocket)
 
     try:
@@ -22,13 +29,19 @@ async def websocket_translate(websocket: WebSocket):
             await websocket.close()
             return
             
-        await orchestrator.handle_config(config)
+        try:
+            await orchestrator.handle_config(config)
+        except Exception as e:
+            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.close()
+            return
 
         while True:
             message = await websocket.receive()
             if "bytes" in message:
                 chunk = message["bytes"]
                 if not chunk: continue
+                # Audio format validation handled inherently if provider requires it
                 await orchestrator.process_audio(chunk)
             elif "text" in message:
                 try:
