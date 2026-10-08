@@ -25,9 +25,9 @@ root_dir = Path(__file__).resolve().parent
 load_dotenv(root_dir / ".env")
 load_dotenv(root_dir / "backend" / ".env")
 
-DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY") or os.environ.get("ASR_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "")
+SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY") or os.environ.get("TRANSLATION_API_KEY", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://yisescosbfuwpddywurr.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
@@ -349,14 +349,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     while True:
                         msg = await message_queue.get()
-                        if msg["type"] in ("disconnect", "end_utterance"):
-                            break
-                        if msg["type"] == "reconnect":
+                        if msg["type"] == "disconnect":
+                            return
+                        if msg["type"] in ("end_utterance", "reconnect"):
                             break
                         if msg["type"] == "audio":
                             await asyncio.sleep(0.05)
                 except asyncio.CancelledError:
-                    break
+                    return
                 continue
 
             try:
@@ -492,6 +492,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             result = sender_task.result()
                             if result == "reconnect":
+                                try:
+                                    await ws_backend.close()
+                                except Exception:
+                                    pass
                                 continue
                         except asyncio.CancelledError:
                             break
@@ -500,16 +504,28 @@ async def websocket_endpoint(websocket: WebSocket):
 
             except Exception as e:
                 print(f"ASR backend connection notice: {e}")
-                # Wait briefly before reconnection attempt
-                await asyncio.sleep(1)
                 break
 
+    receiver_task = asyncio.create_task(frontend_receiver())
+    asr_task = asyncio.create_task(asr_streaming_handler())
+
     try:
-        await asyncio.gather(frontend_receiver(), asr_streaming_handler())
+        done, pending = await asyncio.wait(
+            [receiver_task, asr_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
     except (asyncio.CancelledError, WebSocketDisconnect):
         pass
     except Exception as e:
-        print(f"[WS] Session closed: {e}")
+        print(f"[WS] Session error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        print(f"[WS] Cleaned up session: {session_id}")
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

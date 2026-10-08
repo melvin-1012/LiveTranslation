@@ -1,7 +1,9 @@
-document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => {
+// ws_translation.js - Real-time Voice Recognition & Dravidian Translation with Supabase Integration
+(function() {
+    function initTranslator() {
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
         const sourceTranscript = document.getElementById('sourceTranscript');
         const targetTranslation = document.getElementById('targetTranslation');
         const sourceLanguageSelect = document.getElementById('sourceLanguage');
@@ -10,13 +12,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const statusText = document.getElementById('statusText');
         const statusBadge = document.getElementById('statusBadge');
         const audioWaves = document.getElementById('audioWaves');
+        const swapBtn = document.getElementById('swapLanguagesBtn');
         const app = window.LiveIndicTranslator;
 
         if (
             !startBtn || !stopBtn || !sourceTranscript || !targetTranslation ||
             !sourceLanguageSelect || !targetLanguageSelect || !app
-        ) return;
+        ) {
+            setTimeout(initTranslator, 50);
+            return;
+        }
 
+        // Replace start and stop buttons to remove default webkitSpeechRecognition listeners
         const newStartBtn = startBtn.cloneNode(true);
         startBtn.parentNode.replaceChild(newStartBtn, startBtn);
         const newStopBtn = stopBtn.cloneNode(true);
@@ -53,10 +60,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     : 'status-pill status-ready';
             }
             if (audioWaves) audioWaves.classList.toggle('listening', listening);
+            if (app && app.setStatus) {
+                app.setStatus(listening ? 'listening' : 'ready');
+            }
         }
 
         function reportError(title, message) {
-            app.showLiveAlert('connection-error', title, message);
+            if (app && app.showLiveAlert) {
+                app.showLiveAlert('connection-error', title, message);
+            } else {
+                console.error(title, message);
+            }
         }
 
         function describeError(error) {
@@ -71,53 +85,105 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function updateTextPanels() {
-            sourceTranscript.value = baseSource + currentSource;
+            sourceTranscript.value = (baseSource + currentSource).trimStart();
             sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
             targetTranslation.scrollTop = targetTranslation.scrollHeight;
-            sourceTranscript.dispatchEvent(new Event('input', { bubbles: true }));
-            targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
         function releaseAudio() {
             if (processor) {
-                processor.disconnect();
+                try { processor.disconnect(); } catch (e) {}
                 processor = null;
             }
             if (mediaStream) {
-                mediaStream.getTracks().forEach((track) => track.stop());
+                try { mediaStream.getTracks().forEach((track) => track.stop()); } catch (e) {}
                 mediaStream = null;
             }
             if (audioContext) {
-                void audioContext.close();
+                try { void audioContext.close(); } catch (e) {}
                 audioContext = null;
             }
         }
 
-        async function completeSession() {
-            const sessionId = activeSessionId;
+        async function completeSession(sessionId) {
+            const idToFinish = sessionId || activeSessionId;
             activeSessionId = null;
-            if (sessionId) {
+            if (idToFinish && app && app.finishTranslationSession) {
                 try {
-                    await app.finishTranslationSession(sessionId);
+                    await app.finishTranslationSession(idToFinish);
                 } catch (error) {
-                    reportError(
-                        'Could not save session status',
-                        describeError(error)
-                    );
+                    console.warn('Could not complete session status:', error);
                 }
             }
         }
 
-        async function startListening() {
-            if (starting || ws || activeSessionId) return;
-            starting = true;
+        async function stopListening() {
+            if (isStopping) return;
+            isStopping = true;
+            starting = false;
+
+            // 1. Immediately disconnect audio processor and microphone
+            releaseAudio();
+
+            // 2. Tear down active WebSocket
+            const currentWs = ws;
+            ws = null;
+
+            if (currentWs) {
+                currentWs.onopen = null;
+                currentWs.onmessage = null;
+                currentWs.onerror = null;
+                currentWs.onclose = null;
+
+                try {
+                    if (currentWs.readyState === WebSocket.OPEN) {
+                        currentWs.send(JSON.stringify({ type: 'end_utterance' }));
+                    }
+                } catch (e) {}
+
+                try {
+                    currentWs.close();
+                } catch (e) {}
+            }
+
+            // 3. Mark session complete in Supabase DB
+            const currentSessionId = activeSessionId;
+            activeSessionId = null;
+
+            // 4. Reset flags and UI state
+            isStopping = false;
             setStatus(false);
+
+            if (currentSessionId) {
+                await completeSession(currentSessionId);
+            }
+        }
+
+        async function startListening() {
+            if (starting) return;
+
+            // If a previous session is lingering, clean it up first
+            if (isStopping || ws || activeSessionId) {
+                await stopListening();
+            }
+
+            const sourceLanguage = sourceLanguageSelect.value;
+            const targetLanguage = targetLanguageSelect.value;
+
+            if (sourceLanguage === targetLanguage) {
+                reportError('Invalid Language Pair', 'Please choose two different languages for translation.');
+                return;
+            }
+
+            starting = true;
+            isStopping = false;
+            setStatus(false);
+
             sourceTranscript.value = '';
             targetTranslation.value = '';
             baseSource = '';
             baseTarget = '';
             currentSource = '';
-            isStopping = false;
 
             try {
                 const context = new (window.AudioContext || window.webkitAudioContext)({
@@ -147,20 +213,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 source.connect(processor);
                 processor.connect(context.destination);
 
-                const sourceLanguage = sourceLanguageSelect.value;
-                const targetLanguage = targetLanguageSelect.value;
+                // Create session in Supabase database
                 const session = await app.createTranslationSession(sourceLanguage, targetLanguage);
                 activeSessionId = session.sessionId;
 
                 const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
+                const newWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
+                ws = newWs;
 
-                ws.onopen = () => {
-                    if (isStopping || !ws || ws.readyState !== WebSocket.OPEN) {
-                        ws.close();
+                newWs.onopen = () => {
+                    if (isStopping || ws !== newWs || newWs.readyState !== WebSocket.OPEN) {
+                        try { newWs.close(); } catch (e) {}
                         return;
                     }
-                    ws.send(JSON.stringify({
+                    newWs.send(JSON.stringify({
                         session_id: session.sessionId,
                         source_language: session.sourceLanguageCode,
                         target_language: session.targetLanguageCode,
@@ -172,19 +238,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     setStatus(true);
                 };
 
-                ws.onmessage = (event) => {
+                newWs.onmessage = (event) => {
+                    if (ws !== newWs) return;
                     let data;
                     try {
                         data = JSON.parse(event.data);
                     } catch {
                         reportError('Invalid backend response', 'The translation server returned an invalid message.');
-                        stopListening();
+                        void stopListening();
                         return;
                     }
 
                     if (data.type === 'error') {
                         reportError('Translation service error', data.message || 'The translation server reported an error.');
-                        stopListening();
+                        void stopListening();
                         return;
                     }
                     if (data.type === 'asr_partial' || data.type === 'asr_final') {
@@ -195,7 +262,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (data.type === 'translation_partial') {
                         targetTranslation.value = baseTarget + (data.text || '') + '...';
                         targetTranslation.scrollTop = targetTranslation.scrollHeight;
-                        targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
                         return;
                     }
                     if (data.type === 'translation_final') {
@@ -204,30 +270,37 @@ document.addEventListener('DOMContentLoaded', () => {
                         currentSource = '';
                         sourceTranscript.value = baseSource.trim();
                         targetTranslation.value = baseTarget.trim();
-                        sourceTranscript.dispatchEvent(new Event('input', { bubbles: true }));
-                        targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                        sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
+                        targetTranslation.scrollTop = targetTranslation.scrollHeight;
                     }
                 };
 
-                ws.onerror = () => {
+                newWs.onerror = () => {
+                    if (ws !== newWs) return;
                     reportError('Connection failed', 'Could not connect to the translation server. Check that the backend is running.');
-                    stopListening();
+                    void stopListening();
                 };
 
-                ws.onclose = () => {
-                    releaseAudio();
-                    ws = null;
-                    starting = false;
-                    isStopping = false;
-                    setStatus(false);
-                    void completeSession();
+                newWs.onclose = () => {
+                    if (ws === newWs) {
+                        void stopListening();
+                    }
                 };
             } catch (error) {
+                console.error('startListening exception:', error);
                 starting = false;
-                setStatus(false);
+                isStopping = false;
                 releaseAudio();
-                if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
-                await completeSession();
+                if (ws) {
+                    try { ws.close(); } catch (e) {}
+                    ws = null;
+                }
+                const failedSessionId = activeSessionId;
+                activeSessionId = null;
+                setStatus(false);
+                if (failedSessionId) {
+                    await completeSession(failedSessionId);
+                }
                 reportError(
                     'Could not start translation',
                     describeError(error)
@@ -235,50 +308,53 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        function stopListening() {
-            if (isStopping) return;
-            isStopping = true;
-            starting = false;
-            releaseAudio();
-
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'end_utterance' }));
-                setStatus(false);
-                return;
-            }
-            if (ws) {
-                ws.close();
-                return;
-            }
-
-            isStopping = false;
-            setStatus(false);
-            void completeSession();
-        }
-
         newStartBtn.addEventListener('click', () => {
             void startListening();
         });
-        newStopBtn.addEventListener('click', stopListening);
+
+        newStopBtn.addEventListener('click', () => {
+            void stopListening();
+        });
+
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                baseSource = '';
+                baseTarget = '';
+                currentSource = '';
+                sourceTranscript.value = '';
+                targetTranslation.value = '';
+            });
+        }
+
+        // Dynamic language switching & swap handling
+        async function handleLanguageChange() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('[Lang] Language changed while speaking - restarting session for new pair');
+                await stopListening();
+                await startListening();
+            }
+        }
 
         sourceLanguageSelect.addEventListener('change', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const srcCode = languageCodes[sourceLanguageSelect.value] || 'en';
-                ws.send(JSON.stringify({ source_language: srcCode }));
-            }
+            void handleLanguageChange();
         });
 
         targetLanguageSelect.addEventListener('change', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
-                ws.send(JSON.stringify({ target_language: tgtCode }));
-            }
+            void handleLanguageChange();
         });
+
+        if (swapBtn) {
+            swapBtn.addEventListener('click', () => {
+                setTimeout(() => {
+                    void handleLanguageChange();
+                }, 50);
+            });
+        }
 
         // Debounced Text-to-Text translation when not speaking
         let typingTimer = null;
         sourceTranscript.addEventListener('input', () => {
-            if (newStartBtn.disabled) return;
+            if (ws || starting || isStopping || newStartBtn.disabled) return;
             clearTimeout(typingTimer);
             const text = sourceTranscript.value.trim();
             if (!text) {
@@ -302,12 +378,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         const data = JSON.parse(event.data);
                         if (data.translated_text || data.text) {
                             targetTranslation.value = data.translated_text || data.text;
-                            targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
                         }
                     } catch {}
                     tempWs.close();
                 };
             }, 600);
         });
-    }, 500);
-});
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initTranslator);
+    } else {
+        initTranslator();
+    }
+})();
