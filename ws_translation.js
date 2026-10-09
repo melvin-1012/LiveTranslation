@@ -66,7 +66,7 @@
 
         function setStatus(listening) {
             newStartBtn.disabled = listening || starting;
-            newStopBtn.disabled = !listening;
+            newStopBtn.disabled = !listening && !starting;
             if (startBtnText) startBtnText.textContent = listening ? 'Listening...' : 'Start Speaking';
             if (statusText) statusText.textContent = listening ? 'Live Streaming' : 'Ready';
             if (statusBadge) {
@@ -243,17 +243,18 @@
                     throw new Error('The browser audio context could not be started.');
                 }
 
+                await context.audioWorklet.addModule('/audio_capture_processor.js');
+                if (attemptId !== startAttemptId) return;
+
                 const source = context.createMediaStreamSource(mediaStream);
-                processor = context.createScriptProcessor(4096, 1, 1);
-                processor.onaudioprocess = (event) => {
+                processor = new AudioWorkletNode(context, 'audio-capture-processor', {
+                    numberOfInputs: 1,
+                    numberOfOutputs: 1,
+                    outputChannelCount: [1]
+                });
+                processor.port.onmessage = (event) => {
                     if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
-                    const inputData = event.inputBuffer.getChannelData(0);
-                    const pcm16 = new Int16Array(inputData.length);
-                    for (let index = 0; index < inputData.length; index++) {
-                        const sample = Math.max(-1, Math.min(1, inputData[index]));
-                        pcm16[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-                    }
-                    ws.send(pcm16.buffer);
+                    ws.send(event.data);
                 };
                 source.connect(processor);
                 processor.connect(context.destination);
