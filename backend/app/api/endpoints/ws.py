@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 import json
 import logging
 from app.core.config import settings
@@ -80,7 +81,7 @@ async def websocket_translate(websocket: WebSocket):
             await orchestrator.finalize()
             await persistence_queue.queue.join()
     except Exception as e:
-        if websocket.client_state.value != 3:
+        if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.send_json({"type": "error", "message": str(e)})
             await websocket.close()
     finally:
@@ -88,5 +89,5 @@ async def websocket_translate(websocket: WebSocket):
             await asr_service.close()
         except Exception:
             logger.exception("Failed to close ASR provider")
-        if websocket.client_state.value != 3:
+        if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()

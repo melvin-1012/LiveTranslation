@@ -2,6 +2,9 @@ import pytest
 import asyncio
 import uuid
 from unittest.mock import patch
+from fastapi.testclient import TestClient
+from app.main import app
+from app.core.config import settings
 from app.core.state import StreamingState, is_valid_transition
 from app.core.metrics import TranslationMetricsTracker
 from app.services.streaming_orchestrator import StreamingOrchestrator, MockASRService, MockTranslationService
@@ -11,6 +14,26 @@ class MockWebSocket:
         self.sent_messages = []
     async def send_json(self, payload):
         self.sent_messages.append(payload)
+
+
+def test_auto_detection_fails_clearly_when_mock_provider_is_active(monkeypatch):
+    monkeypatch.setattr(settings, "TRANSLATION_PROVIDER", "mock")
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/translate") as websocket:
+        websocket.send_json({
+            "session_id": str(uuid.uuid4()),
+            "source_language": "auto",
+            "target_language": "ta",
+            "token": "test-token",
+        })
+        response = websocket.receive_json()
+
+    assert response == {
+        "type": "error",
+        "message": "Auto-detection requires TRANSLATION_PROVIDER=sarvam.",
+    }
+
 
 @pytest.mark.asyncio
 async def test_state_transitions():

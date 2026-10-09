@@ -143,7 +143,7 @@ The app loads `dist/app.js`; after changing frontend TypeScript, run the build b
 1. Start the backend and frontend as described above.
 2. Sign up or sign in with an account in the hosted Supabase project.
 3. Select different source and target languages. Save preferences if desired.
-4. Select **Auto-detect** for the source language (or select a source language manually), then choose a target language. Auto-detection requires Sarvam mode and a valid `SARVAM_API_KEY`.
+4. **Auto-detect** is selected by default. Choose a target language. Auto-detection requires `TRANSLATION_PROVIDER=sarvam` and a valid `SARVAM_API_KEY` in `backend/.env`; the example configuration uses mock mode and cannot identify real spoken languages.
 5. Allow microphone access, click **Start Speaking**, and speak clearly.
 6. Confirm recognized text appears in the source panel and translated text appears in the target panel.
 7. Click **Stop** to flush the final result and finish the session.

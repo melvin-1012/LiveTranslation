@@ -306,7 +306,17 @@
                     }
 
                     if (data.type === 'error') {
-                        reportError('Translation service error', data.message || 'The translation server reported an error.');
+                        const message = data.message || 'The translation server reported an error.';
+                        const isAutoDetectionError =
+                            sourceLanguage === 'Auto' &&
+                            (message.includes('Auto-detection requires') ||
+                                message.includes('SARVAM_API_KEY'));
+                        reportError(
+                            isAutoDetectionError ? 'Auto-detection is not configured' : 'Translation service error',
+                            isAutoDetectionError
+                                ? `${message} Set TRANSLATION_PROVIDER=sarvam and configure SARVAM_API_KEY in backend/.env, then restart the backend.`
+                                : message
+                        );
                         void stopListening();
                         return;
                     }
