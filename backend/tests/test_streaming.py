@@ -39,8 +39,45 @@ def test_auto_detection_fails_clearly_when_mock_provider_is_active(monkeypatch):
 async def test_state_transitions():
     assert is_valid_transition(None, StreamingState.UTTERANCE_STARTED)
     assert is_valid_transition(StreamingState.UTTERANCE_STARTED, StreamingState.ASR_PARTIAL)
+    assert is_valid_transition(StreamingState.ASR_UPDATED, StreamingState.ASR_UPDATED)
     assert is_valid_transition(StreamingState.ASR_FINAL, StreamingState.TRANSLATION_FINAL)
     assert not is_valid_transition(StreamingState.UTTERANCE_STARTED, StreamingState.TRANSLATION_FINAL)
+
+
+@pytest.mark.asyncio
+async def test_consecutive_unstable_asr_partials_do_not_break_state_machine(monkeypatch):
+    class RepeatedPartialASR(MockASRService):
+        async def process_audio_chunk(self, chunk: bytes):
+            return {
+                "text": "hello",
+                "is_final": False,
+            }
+
+    monkeypatch.setattr("app.services.streaming_orchestrator.get_supabase_client", lambda token: None)
+    websocket = MockWebSocket()
+    orchestrator = StreamingOrchestrator(
+        RepeatedPartialASR(),
+        MockTranslationService(),
+        websocket,
+    )
+    await orchestrator.handle_config({
+        "session_id": "guest-test",
+        "source_language": "en",
+        "target_language": "ta",
+        "token": "guest",
+    })
+
+    await orchestrator.process_audio(b"audio 1")
+    await orchestrator.process_audio(b"audio 2")
+    await orchestrator.process_audio(b"audio 3")
+
+    assert orchestrator.state == StreamingState.ASR_UPDATED
+    assert [message["type"] for message in websocket.sent_messages] == [
+        "asr_partial",
+        "asr_partial",
+        "asr_partial",
+    ]
+
 
 @pytest.mark.asyncio
 @patch("app.services.streaming_orchestrator.create_utterance")

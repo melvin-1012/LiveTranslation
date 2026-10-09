@@ -16,7 +16,7 @@ def is_valid_transition(current: StreamingState, next_state: StreamingState) -> 
         StreamingState.UTTERANCE_STARTED: [StreamingState.ASR_PARTIAL, StreamingState.ASR_FINAL],
         StreamingState.ASR_PARTIAL: [StreamingState.TRANSLATION_PARTIAL, StreamingState.ASR_UPDATED, StreamingState.ASR_FINAL],
         StreamingState.TRANSLATION_PARTIAL: [StreamingState.ASR_UPDATED, StreamingState.TRANSLATION_UPDATED, StreamingState.ASR_FINAL, StreamingState.TRANSLATION_FINAL],
-        StreamingState.ASR_UPDATED: [StreamingState.TRANSLATION_UPDATED, StreamingState.ASR_FINAL],
+        StreamingState.ASR_UPDATED: [StreamingState.ASR_UPDATED, StreamingState.TRANSLATION_UPDATED, StreamingState.ASR_FINAL],
         StreamingState.TRANSLATION_UPDATED: [StreamingState.ASR_UPDATED, StreamingState.TRANSLATION_UPDATED, StreamingState.ASR_FINAL, StreamingState.TRANSLATION_FINAL],
         StreamingState.ASR_FINAL: [StreamingState.TRANSLATION_FINAL],
         StreamingState.TRANSLATION_FINAL: [StreamingState.PERSISTED],
