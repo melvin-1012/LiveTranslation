@@ -175,7 +175,7 @@ export interface WindowLiveIndicTranslator {
     accessToken: string;
     sourceLanguageCode: string;
     targetLanguageCode: string;
-    sourceLanguageId: string;
+    sourceLanguageId: string | null;
     targetLanguageId: string;
   }>;
   finishTranslationSession: (sessionId: string) => Promise<void>;
@@ -450,16 +450,32 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  async function resolveLanguageId(language: string): Promise<string> {
+    const code = databaseLanguageCode(language);
+    const { data, error } = await supabase
+      .from('supported_languages')
+      .select('id')
+      .eq('code', code)
+      .single();
+    if (error) throw error;
+    return data.id;
+  }
+
   async function saveProfilePreferences(
     userId: string,
     sourceLanguage: string,
     targetLanguage: string,
     displayName?: string
   ): Promise<void> {
-    const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
+    const languageIds = sourceLanguage === 'Auto'
+      ? {
+          sourceLanguageId: null,
+          targetLanguageId: await resolveLanguageId(targetLanguage)
+        }
+      : await resolveLanguageIds(sourceLanguage, targetLanguage);
     const profile: {
       id: string;
-      preferred_source_language_id: string;
+      preferred_source_language_id: string | null;
       preferred_target_language_id: string;
       display_name?: string;
     } = {
@@ -483,14 +499,14 @@ document.addEventListener('DOMContentLoaded', () => {
     accessToken: string;
     sourceLanguageCode: string;
     targetLanguageCode: string;
-    sourceLanguageId: string;
+    sourceLanguageId: string | null;
     targetLanguageId: string;
   }> {
     if (!currentUser) {
       openAuthModal('login');
       throw new Error('Sign in to save translation sessions.');
     }
-    if (sourceLanguage === targetLanguage) {
+    if (sourceLanguage !== 'Auto' && sourceLanguage === targetLanguage) {
       throw new Error('Choose two different languages for translation.');
     }
     const { data: authData, error: authError } = await supabase.auth.getSession();
@@ -499,7 +515,9 @@ document.addEventListener('DOMContentLoaded', () => {
       throw new Error('Your sign-in session has expired. Please sign in again.');
     }
 
-    const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
+    const languageIds = sourceLanguage === 'Auto'
+      ? { sourceLanguageId: null, targetLanguageId: await resolveLanguageId(targetLanguage) }
+      : await resolveLanguageIds(sourceLanguage, targetLanguage);
     const { data, error } = await supabase
       .from('translation_sessions')
       .insert({
@@ -516,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return {
       sessionId: data.id,
       accessToken: authData.session.access_token,
-      sourceLanguageCode: databaseLanguageCode(sourceLanguage),
+      sourceLanguageCode: sourceLanguage === 'Auto' ? 'auto' : databaseLanguageCode(sourceLanguage),
       targetLanguageCode: databaseLanguageCode(targetLanguage),
       sourceLanguageId: languageIds.sourceLanguageId,
       targetLanguageId: languageIds.targetLanguageId
@@ -561,7 +579,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateLanguageBadges(): void {
     if (sourceLangBadge && sourceLanguageSelect) {
-      sourceLangBadge.textContent = sourceLanguageSelect.value;
+      sourceLangBadge.textContent = sourceLanguageSelect.value === 'Auto'
+        ? 'Auto-detect'
+        : sourceLanguageSelect.value;
     }
     if (targetLangBadge && targetLanguageSelect) {
       targetLangBadge.textContent = targetLanguageSelect.value;
@@ -573,7 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (sourceLanguageSelect) {
     sourceLanguageSelect.addEventListener('change', () => {
-      if (sourceLanguageSelect.value === targetLanguageSelect.value) {
+      if (sourceLanguageSelect.value !== 'Auto' && sourceLanguageSelect.value === targetLanguageSelect.value) {
         const options = Array.from(targetLanguageSelect.options);
         const fallback = options.find((opt) => opt.value !== sourceLanguageSelect.value);
         if (fallback) targetLanguageSelect.value = fallback.value;
@@ -582,7 +602,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (recognition) {
         const selectedLang = sourceLanguageSelect.value as IndicLanguage;
-        recognition.lang = languageCodes[selectedLang] || 'en-US';
+        recognition.lang = sourceLanguageSelect.value === 'Auto'
+          ? 'en-IN'
+          : languageCodes[selectedLang] || 'en-US';
       }
     });
   }
@@ -601,6 +623,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Swap Languages
   if (swapLanguagesBtn) {
     swapLanguagesBtn.addEventListener('click', () => {
+      if (sourceLanguageSelect.value === 'Auto') return;
       const tempLang = sourceLanguageSelect.value;
       sourceLanguageSelect.value = targetLanguageSelect.value;
       targetLanguageSelect.value = tempLang;

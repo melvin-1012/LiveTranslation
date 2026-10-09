@@ -29,6 +29,7 @@ class PersistenceQueue:
                         data["transcript"],
                         data.get("is_final", True),
                         data.get("language_id"),
+                        data.get("confidence"),
                     )
                     if data.get("is_final"):
                         translation_db_service.update_utterance_transcript(
@@ -37,6 +38,12 @@ class PersistenceQueue:
                             data["transcript"],
                             data.get("language_id"),
                         )
+                        if data.get("session_id") and data.get("language_id"):
+                            translation_db_service.set_session_source_language_if_missing(
+                                db,
+                                data["session_id"],
+                                data["language_id"],
+                            )
                 elif event == "store_translation_result":
                     res = translation_db_service.store_translation_result(
                         db, data["utterance_id"], data.get("model_name", "mock_translator"), 

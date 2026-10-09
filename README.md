@@ -2,7 +2,7 @@
 
 Live Indic Translator is a browser-based, real-time speech translation prototype. It captures microphone audio, streams it to a FastAPI WebSocket backend, transcribes speech, translates between supported Indian languages and English, and displays the transcript and translation. Authenticated users can save language preferences and view session history through the existing hosted Supabase project.
 
-The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. Translation is configured by selecting distinct source and target languages.
+The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. Select **Auto-detect** to have Sarvam identify the spoken source language, or select a source language manually. Choose the target language separately.
 
 ## How it works
 
@@ -143,13 +143,13 @@ The app loads `dist/app.js`; after changing frontend TypeScript, run the build b
 1. Start the backend and frontend as described above.
 2. Sign up or sign in with an account in the hosted Supabase project.
 3. Select different source and target languages. Save preferences if desired.
-4. Select Sarvam mode with a valid `SARVAM_API_KEY` to exercise real speech recognition and translation.
+4. Select **Auto-detect** for the source language (or select a source language manually), then choose a target language. Auto-detection requires Sarvam mode and a valid `SARVAM_API_KEY`.
 5. Allow microphone access, click **Start Speaking**, and speak clearly.
 6. Confirm recognized text appears in the source panel and translated text appears in the target panel.
 7. Click **Stop** to flush the final result and finish the session.
 8. Open **History** while signed in to inspect persisted sessions.
 
-The available Sarvam language codes are `en`, `hi`, `ta`, `te`, `kn`, and `ml`, mapped by the backend to the corresponding `*-IN` provider codes. Provider output can vary with audio quality, network latency, API availability, and the selected language pair.
+The available Sarvam language codes are `en`, `hi`, `ta`, `te`, `kn`, and `ml`, mapped by the backend to the corresponding `*-IN` provider codes. In Auto-detect mode, Saaras v4 uses Sarvam's adaptive `language_code=auto` streaming mode. The detected language is shown in the source badge and stored with the utterance; the session history uses the first detected language as its source language. Provider output can vary with audio quality, background noise, accents, network latency, API availability, and the selected language pair. Mock mode does not detect spoken languages.
 
 For a provider-independent persistence check, select mock mode and complete a session. Mock mode returns synthetic transcripts/translations; it is not a demonstration of actual speech recognition quality.
 

@@ -17,7 +17,7 @@ SARVAM_API_KEY=your-sarvam-key-here
 If you set `TRANSLATION_PROVIDER=mock`, the system will use a local test harness that mimics AI responses, which is completely free and requires no internet/keys.
 
 ### Language Mapping
-The application internally uses standard ISO codes (`en`, `hi`, `ta`, `te`, `kn`, `ml`).
+The application internally uses standard ISO codes (`en`, `hi`, `ta`, `te`, `kn`, `ml`). For automatic source-language detection, the backend connects with `language_code=auto` and normalizes Sarvam's detected language back to one of the supported app codes.
 The backend automatically maps these to Sarvam's specific BCP-47 codes:
 - `en` → `en-IN`
 - `hi` → `hi-IN`
@@ -29,7 +29,7 @@ The backend automatically maps these to Sarvam's specific BCP-47 codes:
 ### ASR Architecture & Audio Format
 The backend uses Python's `websockets` package to establish a dedicated, asynchronous streaming connection to `wss://api.sarvam.ai/speech-to-text`.
 - **Audio Format:** The provider generally expects raw PCM or WAV data (16kHz). The frontend is responsible for transmitting the correct bytes over the WebSocket.
-- The `SarvamASRService` drains an asyncio queue for partial/final results, mapping language detections (Mode A vs Mode B auto-detection) back to the internal application format.
+- The `SarvamASRService` drains an asyncio queue for partial/final results, including Sarvam's detected language and final language confidence when auto-detection is enabled. The orchestrator uses that detected language for translation and persists it to the utterance. Mock mode does not perform language detection.
 
 ### Translation Architecture
 The backend uses `httpx.AsyncClient` to asynchronously call Sarvam's `https://api.sarvam.ai/translate` endpoint for text translation. 

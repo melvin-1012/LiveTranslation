@@ -8,6 +8,7 @@
         const targetTranslation = document.getElementById('targetTranslation');
         const sourceLanguageSelect = document.getElementById('sourceLanguage');
         const targetLanguageSelect = document.getElementById('targetLanguage');
+        const sourceLangBadge = document.getElementById('sourceLangBadge');
         const startBtnText = document.getElementById('startBtnText');
         const statusText = document.getElementById('statusText');
         const statusBadge = document.getElementById('statusBadge');
@@ -37,6 +38,14 @@
             Kannada: 'kn',
             Malayalam: 'ml'
         };
+        const languageNames = {
+            en: 'English',
+            ta: 'Tamil',
+            hi: 'Hindi',
+            te: 'Telugu',
+            kn: 'Kannada',
+            ml: 'Malayalam'
+        };
 
         let ws = null;
         let audioContext = null;
@@ -48,6 +57,7 @@
         let baseSource = '';
         let baseTarget = '';
         let currentSource = '';
+        let detectedSourceLanguage = null;
         let languageChangeTimer = null;
         let languageRestartInProgress = false;
         let languageRestartPending = false;
@@ -167,6 +177,11 @@
             if (currentSessionId) {
                 await completeSession(currentSessionId);
             }
+            if (sourceLangBadge) {
+                sourceLangBadge.textContent = sourceLanguageSelect.value === 'Auto'
+                    ? 'Auto-detect'
+                    : sourceLanguageSelect.value;
+            }
         }
 
         async function startListening() {
@@ -180,7 +195,7 @@
             const sourceLanguage = sourceLanguageSelect.value;
             const targetLanguage = targetLanguageSelect.value;
 
-            if (sourceLanguage === targetLanguage) {
+            if (sourceLanguage !== 'Auto' && sourceLanguage === targetLanguage) {
                 reportError('Invalid Language Pair', 'Please choose two different languages for translation.');
                 return;
             }
@@ -200,6 +215,12 @@
             baseSource = '';
             baseTarget = '';
             currentSource = '';
+            detectedSourceLanguage = null;
+            if (sourceLangBadge) {
+                sourceLangBadge.textContent = sourceLanguage === 'Auto'
+                    ? 'Detecting...'
+                    : sourceLanguage;
+            }
 
             try {
                 const context = new (window.AudioContext || window.webkitAudioContext)({
@@ -289,7 +310,18 @@
                         void stopListening();
                         return;
                     }
+                    if (data.type === 'language_detection_failed') {
+                        reportError('Language not recognized', data.message || 'Please try speaking again.');
+                        void stopListening();
+                        return;
+                    }
                     if (data.type === 'asr_partial' || data.type === 'asr_final') {
+                        if (data.language && languageNames[data.language]) {
+                            detectedSourceLanguage = languageNames[data.language];
+                            if (sourceLangBadge) {
+                                sourceLangBadge.textContent = detectedSourceLanguage;
+                            }
+                        }
                         currentSource = data.text || '';
                         updateTextPanels();
                         return;

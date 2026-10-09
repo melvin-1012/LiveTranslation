@@ -30,6 +30,15 @@ def create_utterance(db: Client, session_id: str, sequence_number: int) -> Dict[
     res = db.table('utterances').insert({"session_id": session_id, "sequence_number": sequence_number}).execute()
     return res.data[0]
 
+def get_language_id(db: Client, language_code: str) -> str:
+    res = db.table('supported_languages').select('id').eq('code', language_code).single().execute()
+    return res.data['id']
+
+def set_session_source_language_if_missing(db: Client, session_id: str, language_id: str) -> None:
+    db.table('translation_sessions').update({"source_language_id": language_id}).eq(
+        'id', session_id
+    ).is_('source_language_id', 'null').execute()
+
 def store_asr_result(
     db: Client,
     utterance_id: str,
@@ -37,6 +46,7 @@ def store_asr_result(
     transcript: str,
     is_final: bool,
     language_id: str = None,
+    confidence: float = None,
 ) -> Dict[str, Any]:
     data = {
         "utterance_id": utterance_id, 
@@ -47,6 +57,8 @@ def store_asr_result(
     }
     if language_id:
         data["language_id"] = language_id
+    if confidence is not None:
+        data["confidence"] = confidence
     res = db.table('asr_results').insert(data).execute()
     return res.data[0]
 

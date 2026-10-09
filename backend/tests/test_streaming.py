@@ -48,6 +48,113 @@ async def test_streaming_orchestrator_flow(mock_get_db, mock_create):
     assert ws.sent_messages[3]["version_number"] == 2
     assert ws.sent_messages[3]["is_final"]
 
+
+@pytest.mark.asyncio
+async def test_auto_detected_language_drives_translation_and_persistence(monkeypatch):
+    class DetectedASR(MockASRService):
+        async def process_audio_chunk(self, chunk: bytes):
+            return {
+                "text": "வணக்கம் உலகம்",
+                "is_final": False,
+                "language": "ta-IN",
+                "language_confidence": 0.98,
+            }
+
+        async def finalize(self):
+            return {
+                "text": "வணக்கம் உலகம்",
+                "is_final": True,
+                "language": "ta-IN",
+                "language_confidence": 0.99,
+            }
+
+    class RecordingTranslator(MockTranslationService):
+        def __init__(self):
+            self.sources = []
+
+        async def translate_partial(self, text, source_lang, target_lang, glossary=None):
+            self.sources.append(source_lang)
+            return {"translated_text": "Hello world", "provider": "test"}
+
+        async def translate_final(self, text, source_lang, target_lang, glossary=None):
+            self.sources.append(source_lang)
+            return {"translated_text": "Hello world", "provider": "test"}
+
+    queued = []
+
+    async def enqueue(event_type, token, data):
+        queued.append((event_type, data))
+
+    monkeypatch.setattr("app.services.streaming_orchestrator.get_supabase_client", lambda token: object())
+    monkeypatch.setattr("app.services.streaming_orchestrator.create_utterance", lambda *args: {"id": "utterance-id"})
+    monkeypatch.setattr("app.services.streaming_orchestrator.get_language_id", lambda db, code: "tamil-id")
+    monkeypatch.setattr("app.services.streaming_orchestrator.persistence_queue.enqueue", enqueue)
+
+    websocket = MockWebSocket()
+    translator = RecordingTranslator()
+    orchestrator = StreamingOrchestrator(DetectedASR(), translator, websocket)
+    await orchestrator.handle_config({
+        "session_id": str(uuid.uuid4()),
+        "source_language": "auto",
+        "target_language": "en",
+        "target_language_id": "english-id",
+        "token": "test-token",
+    })
+
+    await orchestrator.process_audio(b"audio")
+    await orchestrator.finalize()
+
+    assert translator.sources == ["ta", "ta"]
+    assert [message["language"] for message in websocket.sent_messages if message["type"].startswith("asr_")] == [
+        "ta",
+        "ta",
+    ]
+    asr_persistence = next(data for event, data in queued if event == "store_asr_result")
+    translation_persistence = next(data for event, data in queued if event == "store_translation_result" and data["is_final"])
+    assert asr_persistence["language_id"] == "tamil-id"
+    assert asr_persistence["confidence"] == 0.99
+    assert asr_persistence["session_id"] == orchestrator.session_id
+    assert translation_persistence["source_language_id"] == "tamil-id"
+    assert orchestrator.state == StreamingState.PERSISTED
+
+
+@pytest.mark.asyncio
+async def test_manual_source_language_is_not_overridden_by_asr_metadata(monkeypatch):
+    class ConflictingASR(MockASRService):
+        async def process_audio_chunk(self, chunk: bytes):
+            return {
+                "text": "Hello there",
+                "is_final": False,
+                "language": "ta-IN",
+            }
+
+    class RecordingTranslator(MockTranslationService):
+        def __init__(self):
+            self.sources = []
+
+        async def translate_partial(self, text, source_lang, target_lang, glossary=None):
+            self.sources.append(source_lang)
+            return {"translated_text": "வணக்கம்", "provider": "test"}
+
+    monkeypatch.setattr("app.services.streaming_orchestrator.get_supabase_client", lambda token: object())
+    monkeypatch.setattr("app.services.streaming_orchestrator.create_utterance", lambda *args: {"id": "utterance-id"})
+    websocket = MockWebSocket()
+    translator = RecordingTranslator()
+    orchestrator = StreamingOrchestrator(ConflictingASR(), translator, websocket)
+
+    await orchestrator.handle_config({
+        "session_id": str(uuid.uuid4()),
+        "source_language": "en",
+        "target_language": "ta",
+        "source_language_id": "english-id",
+    })
+    await orchestrator.process_audio(b"audio")
+
+    assert translator.sources == ["en"]
+    asr_message = next(message for message in websocket.sent_messages if message["type"] == "asr_partial")
+    assert asr_message["language"] == "en"
+
+
 def test_metrics():
     metrics = TranslationMetricsTracker()
     metrics.mark_audio_received()

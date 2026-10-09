@@ -27,8 +27,9 @@ def map_lang(app_lang: str) -> str:
         raise ValueError(f"Unsupported Sarvam language code: {app_lang}") from exc
 
 def map_lang_reverse(sarvam_lang: str) -> str:
+    normalized = sarvam_lang.lower().replace("_", "-")
     for k, v in LANGUAGE_MAP.items():
-        if v == sarvam_lang:
+        if v.lower() == normalized or k == normalized:
             return k
     raise ValueError(f"Unsupported Sarvam language code: {sarvam_lang}")
 
@@ -52,9 +53,8 @@ class SarvamASRService(ASRService):
             raise ValueError("SARVAM_API_KEY is not configured.")
         self.config = config
         
-        # Determine language (Mode A/B)
-        lang = config.get("source_language", "ml")
-        sarvam_lang = map_lang(lang) if lang in LANGUAGE_MAP else "ml-IN"
+        lang = config.get("source_language", "auto")
+        sarvam_lang = "auto" if lang == "auto" else map_lang(lang)
         
         uri = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code={sarvam_lang}&model=saaras:v4"
         try:
@@ -73,24 +73,28 @@ class SarvamASRService(ASRService):
             while self.is_connected:
                 message = await self.ws.recv()
                 data = json.loads(message)
-                if data.get("event") == "transcript":
-                    transcript = data.get("text", "")
-                    is_final = data.get("is_final", False)
-                    if transcript:
-                        await self.result_queue.put({
-                            "text": transcript,
-                            "is_final": is_final,
-                            "language": self.config.get("source_language", "ml")
-                        })
-                elif "transcript" in data:
-                    transcript = data.get("transcript", "")
-                    is_final = data.get("is_final", False)
-                    if transcript:
-                        await self.result_queue.put({
-                            "text": transcript,
-                            "is_final": is_final,
-                            "language": self.config.get("source_language", "ml")
-                        })
+                event = data.get("event", "")
+                transcript = data.get("text") or data.get("transcript") or ""
+                is_final = data.get("is_final", event.endswith(".final"))
+                if transcript and (event.startswith("transcript") or "transcript" in data):
+                    language = data.get("language")
+                    if not language and self.config.get("source_language") != "auto":
+                        language = self.config.get("source_language")
+                    result = {
+                        "text": transcript,
+                        "is_final": is_final,
+                        "language": language,
+                    }
+                    confidence = data.get("language_confidence")
+                    if confidence is not None:
+                        result["language_confidence"] = confidence
+                    await self.result_queue.put(result)
+                elif event == "error":
+                    logger.error(
+                        "Sarvam ASR error %s: %s",
+                        data.get("code", "unknown"),
+                        data.get("message", "No error message"),
+                    )
         except Exception as e:
             logger.error(f"Sarvam ASR Receive loop error: {e}")
             self.is_connected = False

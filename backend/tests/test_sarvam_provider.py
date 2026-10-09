@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.services.providers import sarvam
@@ -30,6 +32,82 @@ def test_rejects_unsupported_or_identical_language_pairs() -> None:
 
     with pytest.raises(ValueError, match="must be different"):
         sarvam.map_translation_pair("ta", "ta")
+
+
+@pytest.mark.parametrize(
+    ("provider_language", "expected"),
+    [
+        ("en-IN", "en"),
+        ("ta-IN", "ta"),
+        ("hi", "hi"),
+        ("te-in", "te"),
+        ("kn_IN", "kn"),
+        ("ml", "ml"),
+    ],
+)
+def test_normalizes_detected_language_codes(provider_language: str, expected: str) -> None:
+    assert sarvam.map_lang_reverse(provider_language) == expected
+
+
+def test_rejects_detected_languages_outside_application_support() -> None:
+    with pytest.raises(ValueError, match="Unsupported Sarvam language"):
+        sarvam.map_lang_reverse("bn-IN")
+    with pytest.raises(ValueError, match="Unsupported Sarvam language"):
+        sarvam.map_lang_reverse("ta-XX")
+
+
+@pytest.mark.asyncio
+async def test_auto_stream_uses_sarvam_adaptive_language_detection(monkeypatch) -> None:
+    requested = {}
+
+    class Socket:
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            return None
+
+    async def connect(uri, *, additional_headers):
+        requested["uri"] = uri
+        return Socket()
+
+    monkeypatch.setattr(sarvam.websockets, "connect", connect)
+    service = sarvam.SarvamASRService()
+    service.api_key = "test-key"
+
+    await service.start_stream({"source_language": "auto"})
+    await service.close()
+
+    assert "language_code=auto" in requested["uri"]
+    assert "model=saaras:v4" in requested["uri"]
+
+
+@pytest.mark.asyncio
+async def test_reads_detected_language_and_confidence_from_realtime_event() -> None:
+    class Socket:
+        def __init__(self):
+            self.messages = [
+                '{"event":"transcript.final","text":"வணக்கம்","language":"ta-IN","language_confidence":0.98}'
+            ]
+
+        async def recv(self):
+            if self.messages:
+                return self.messages.pop(0)
+            raise RuntimeError("end test receive loop")
+
+    service = sarvam.SarvamASRService()
+    service.config = {"source_language": "auto"}
+    service.ws = Socket()
+    service.is_connected = True
+
+    await service._receive_loop()
+
+    assert await service.result_queue.get() == {
+        "text": "வணக்கம்",
+        "is_final": True,
+        "language": "ta-IN",
+        "language_confidence": 0.98,
+    }
 
 
 @pytest.mark.asyncio

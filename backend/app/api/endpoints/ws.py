@@ -2,6 +2,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import json
 import logging
+from app.core.config import settings
 from app.services.persistence_queue import persistence_queue
 from app.services.streaming_orchestrator import StreamingOrchestrator, get_provider_factory
 
@@ -33,8 +34,18 @@ async def websocket_translate(websocket: WebSocket):
                 "token",
             ]):
                 raise ValueError("Missing config fields")
+            if config["source_language"] != "auto" and config["source_language"] == config["target_language"]:
+                raise ValueError("Source and target languages must be different")
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid initial configuration"})
+            await websocket.close()
+            return
+
+        if config["source_language"] == "auto" and settings.TRANSLATION_PROVIDER != "sarvam":
+            await websocket.send_json({
+                "type": "error",
+                "message": "Auto-detection requires TRANSLATION_PROVIDER=sarvam."
+            })
             await websocket.close()
             return
             
