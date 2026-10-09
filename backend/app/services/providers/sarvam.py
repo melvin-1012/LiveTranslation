@@ -34,6 +34,27 @@ def map_lang_reverse(sarvam_lang: str) -> str:
     raise ValueError(f"Unsupported Sarvam language code: {sarvam_lang}")
 
 
+async def identify_text_language(text: str) -> Optional[str]:
+    """Identify the language of input text using Sarvam LID API."""
+    if not settings.SARVAM_API_KEY or not text.strip():
+        return None
+    url = "https://api.sarvam.ai/text-lid"
+    headers = {
+        "api-subscription-key": settings.SARVAM_API_KEY,
+        "Content-Type": "application/json"
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json={"input": text}, headers=headers, timeout=5.0)
+            if resp.status_code == 200:
+                lang_code = resp.json().get("language_code")
+                if lang_code:
+                    return map_lang_reverse(lang_code)
+    except Exception as e:
+        logger.warning("Sarvam text LID error: %s", e)
+    return None
+
+
 def map_translation_pair(source_lang: str, target_lang: str) -> tuple[str, str]:
     if source_lang == target_lang:
         raise ValueError("Source and target languages must be different.")
@@ -47,11 +68,13 @@ class SarvamASRService(ASRService):
         self.receive_task = None
         self.result_queue = asyncio.Queue()
         self.is_connected = False
+        self.last_result = None
 
     async def start_stream(self, config: dict):
         if not self.api_key:
             raise ValueError("SARVAM_API_KEY is not configured.")
         self.config = config
+        self.last_result = None
         
         lang = config.get("source_language", "auto")
         sarvam_lang = "auto" if lang == "auto" else map_lang(lang)
@@ -88,6 +111,7 @@ class SarvamASRService(ASRService):
                     confidence = data.get("language_confidence")
                     if confidence is not None:
                         result["language_confidence"] = confidence
+                    self.last_result = result
                     await self.result_queue.put(result)
                 elif event == "error":
                     logger.error(
@@ -126,9 +150,8 @@ class SarvamASRService(ASRService):
                 await self.ws.send(json.dumps({"event": "flush"}))
                 while True:
                     try:
-                        result = await asyncio.wait_for(self.result_queue.get(), timeout=3.0)
+                        result = await asyncio.wait_for(self.result_queue.get(), timeout=1.0)
                     except asyncio.TimeoutError:
-                        logger.warning("Timed out waiting for Sarvam final transcript after flush")
                         break
                     results.append(result)
                     if result.get("is_final"):
@@ -136,8 +159,17 @@ class SarvamASRService(ASRService):
             except Exception as e:
                 logger.exception("Sarvam ASR finalization failed")
                 raise RuntimeError("Could not finalize Sarvam ASR stream") from e
+
+        if not results and self.last_result:
+            final_res = dict(self.last_result)
+            final_res["is_final"] = True
+            return final_res
+
         if not results:
             return None
+
+        if not any(r.get("is_final") for r in results):
+            results[-1]["is_final"] = True
         return results[0] if len(results) == 1 else results
 
     async def close(self):

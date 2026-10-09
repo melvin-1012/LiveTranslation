@@ -28,6 +28,36 @@ async def websocket_translate(websocket: WebSocket):
         raw_msg = await websocket.receive_text()
         try:
             config = json.loads(raw_msg)
+            # Direct text-to-text translation support
+            if "text_to_translate" in config:
+                txt = config["text_to_translate"].strip()
+                src = config.get("source_language", "auto")
+                tgt = config.get("target_language", "hi")
+                if src == "auto":
+                    from app.services.streaming_orchestrator import detect_script_language
+                    detected = detect_script_language(txt)
+                    if not detected:
+                        from app.services.providers.sarvam import identify_text_language
+                        detected = await identify_text_language(txt)
+                    src = detected or "en"
+                if src == tgt:
+                    translated = txt
+                else:
+                    trans_res = await trans_service.translate_final(txt, src, tgt)
+                    translated = trans_res.get("translated_text", txt)
+
+                await websocket.send_json({
+                    "type": "translation_final",
+                    "status": "success",
+                    "text": translated,
+                    "translated_text": translated,
+                    "language": src,
+                    "target_language": tgt,
+                    "is_final": True
+                })
+                await websocket.close()
+                return
+
             if not all(k in config for k in [
                 "session_id",
                 "source_language",
@@ -75,6 +105,31 @@ async def websocket_translate(websocket: WebSocket):
                     finalized = True
                     await persistence_queue.queue.join()
                     break
+                elif "text_to_translate" in data:
+                    txt = data["text_to_translate"].strip()
+                    src = data.get("source_language") or orchestrator.source_lang or "auto"
+                    tgt = data.get("target_language") or orchestrator.target_lang or "hi"
+                    if src == "auto":
+                        from app.services.streaming_orchestrator import detect_script_language
+                        detected = detect_script_language(txt)
+                        if not detected:
+                            from app.services.providers.sarvam import identify_text_language
+                            detected = await identify_text_language(txt)
+                        src = detected or "en"
+                    if src == tgt:
+                        translated = txt
+                    else:
+                        trans_res = await trans_service.translate_final(txt, src, tgt)
+                        translated = trans_res.get("translated_text", txt)
+                    await websocket.send_json({
+                        "type": "translation_final",
+                        "status": "success",
+                        "text": translated,
+                        "translated_text": translated,
+                        "language": src,
+                        "target_language": tgt,
+                        "is_final": True
+                    })
 
     except WebSocketDisconnect:
         if not finalized:

@@ -47,6 +47,21 @@ class MockTranslationService(TranslationService):
     async def translate_final(self, text: str, source_lang: str, target_lang: str, glossary: dict = None) -> dict:
         return {"translated_text": f"mock translated final for {text}", "confidence": 0.95}
 
+def detect_script_language(text: str) -> Optional[str]:
+    for char in text:
+        cp = ord(char)
+        if 0x0900 <= cp <= 0x097F:
+            return "hi"
+        if 0x0B80 <= cp <= 0x0BFF:
+            return "ta"
+        if 0x0C00 <= cp <= 0x0C7F:
+            return "te"
+        if 0x0C80 <= cp <= 0x0CFF:
+            return "kn"
+        if 0x0D00 <= cp <= 0x0D7F:
+            return "ml"
+    return None
+
 class StreamingOrchestrator:
     def __init__(self, asr: ASRService, translator: TranslationService, websocket):
         self.asr = asr
@@ -87,11 +102,14 @@ class StreamingOrchestrator:
         
         try:
             self.db = get_supabase_client(self.token)
-            res = create_utterance(self.db, self.session_id, self.sequence_number)
-            self.utterance_id = res["id"]
+            if self.session_id and not str(self.session_id).startswith("guest-"):
+                res = create_utterance(self.db, self.session_id, self.sequence_number)
+                self.utterance_id = res["id"]
+            else:
+                self.utterance_id = str(uuid.uuid4())
         except Exception as e:
-            logger.error(f"Failed to initialize utterance in DB: {e}")
-            raise ValueError(f"DB Error: {e}")
+            logger.warning(f"Could not initialize utterance in DB (offline fallback): {e}")
+            self.utterance_id = str(uuid.uuid4())
             
         await self.asr.start_stream(config)
 
@@ -123,36 +141,75 @@ class StreamingOrchestrator:
         is_final = asr_result.get("is_final", False)
         text = asr_result.get("text", "")
         detected_language = asr_result.get("language")
-        if detected_language and self.auto_detect:
+        known_ids = {
+            "en": "43a7cfdc-c0dc-4a19-9901-27f536165d45",
+            "hi": "7e0d2af7-cab7-4190-ac2d-6a32f574db38",
+            "ta": "2d0800b5-746d-4389-adcf-d0167a33e6b1",
+            "te": "f3e1d3a6-d031-4b11-9659-32e51183c1a1",
+            "kn": "6dc5cdd2-a18d-443d-9a9f-cccb4c7da3ce",
+            "ml": "3bc98387-7244-4d1b-a63e-b314190a2b53",
+        }
+        if self.auto_detect and text.strip():
+            script_lang = detect_script_language(text)
+            if script_lang:
+                self.source_lang = script_lang
+            elif detected_language:
+                try:
+                    from app.services.providers.sarvam import map_lang_reverse, identify_text_language
+                    rev_lang = map_lang_reverse(detected_language)
+                    if rev_lang == "en" and is_final:
+                        lid_lang = await identify_text_language(text)
+                        self.source_lang = lid_lang or rev_lang
+                    else:
+                        self.source_lang = rev_lang
+                except ValueError:
+                    self.source_lang = None
+
+            if self.source_lang is None:
+                try:
+                    from app.services.providers.sarvam import identify_text_language
+                    detected = await identify_text_language(text)
+                    if detected:
+                        self.source_lang = detected
+                except Exception as e:
+                    logger.debug("LID fallback notice: %s", e)
+
+            if self.source_lang:
+                if self.source_lang not in self.language_id_cache:
+                    try:
+                        self.language_id_cache[self.source_lang] = get_language_id(
+                            self.db, self.source_lang
+                        )
+                    except Exception as err:
+                        self.language_id_cache[self.source_lang] = known_ids.get(self.source_lang)
+                self.source_language_id = self.language_id_cache.get(self.source_lang)
+                if self.session_id and not self.session_source_language_set:
+                    self.session_source_language_set = True
+        elif detected_language and self.auto_detect:
             try:
                 from app.services.providers.sarvam import map_lang_reverse
                 self.source_lang = map_lang_reverse(detected_language)
                 if self.source_lang not in self.language_id_cache:
-                    self.language_id_cache[self.source_lang] = get_language_id(
-                        self.db, self.source_lang
-                    )
-                self.source_language_id = self.language_id_cache[self.source_lang]
-                if self.session_id and not self.session_source_language_set:
-                    self.session_source_language_set = True
+                    self.language_id_cache[self.source_lang] = known_ids.get(self.source_lang)
+                self.source_language_id = self.language_id_cache.get(self.source_lang)
             except ValueError:
-                logger.warning("Ignoring unsupported detected language: %s", detected_language)
-                self.source_lang = None
-                self.source_language_id = None
+                pass
 
         self.metrics.mark_asr_first()
         
         if is_final:
             await self.transition_state(StreamingState.ASR_FINAL)
             # Store final ASR result
-            await persistence_queue.enqueue("store_asr_result", self.token, {
-                "utterance_id": self.utterance_id,
-                "model_name": "sarvam_asr",
-                "transcript": text,
-                "is_final": True,
-                "language_id": self.source_language_id,
-                "confidence": asr_result.get("language_confidence"),
-                "session_id": self.session_id if self.auto_detect else None
-            })
+            if self.token and self.token != "guest":
+                await persistence_queue.enqueue("store_asr_result", self.token, {
+                    "utterance_id": self.utterance_id,
+                    "model_name": "sarvam_asr",
+                    "transcript": text,
+                    "is_final": True,
+                    "language_id": self.source_language_id,
+                    "confidence": asr_result.get("language_confidence"),
+                    "session_id": self.session_id if self.auto_detect else None
+                })
         else:
             if self.state == StreamingState.UTTERANCE_STARTED:
                 await self.transition_state(StreamingState.ASR_PARTIAL)
@@ -208,7 +265,9 @@ class StreamingOrchestrator:
             "utterance_id": self.utterance_id,
             "text": trans_res["translated_text"],
             "version_number": self.translation_version,
-            "is_final": is_final
+            "is_final": is_final,
+            "language": self.source_lang,
+            "target_language": self.target_lang
         })
 
         metrics_data = None
@@ -216,16 +275,17 @@ class StreamingOrchestrator:
             metrics_data = self.metrics.calculate_metrics()
             
         # Ensure only the final result has is_final = true
-        await persistence_queue.enqueue("store_translation_result", self.token, {
-            "utterance_id": self.utterance_id,
-            "model_name": trans_res.get("provider", "sarvam_translation"),
-            "translated_text": trans_res["translated_text"],
-            "version_number": self.translation_version,
-            "is_final": is_final,
-            "source_language_id": self.source_language_id,
-            "target_language_id": self.target_language_id,
-            "metrics": metrics_data
-        })
+        if self.token and self.token != "guest":
+            await persistence_queue.enqueue("store_translation_result", self.token, {
+                "utterance_id": self.utterance_id,
+                "model_name": trans_res.get("provider", "sarvam_translation"),
+                "translated_text": trans_res["translated_text"],
+                "version_number": self.translation_version,
+                "is_final": is_final,
+                "source_language_id": self.source_language_id,
+                "target_language_id": self.target_language_id,
+                "metrics": metrics_data
+            })
 
         if is_final:
             await self.transition_state(StreamingState.PERSISTED)

@@ -31,6 +31,7 @@
         stopBtn.parentNode.replaceChild(newStopBtn, stopBtn);
 
         const languageCodes = {
+            Auto: 'auto',
             English: 'en',
             Tamil: 'ta',
             Hindi: 'hi',
@@ -145,28 +146,49 @@
             // 1. Immediately disconnect audio processor and microphone
             releaseAudio();
 
-            // 2. Tear down active WebSocket
+            // 2. Tear down active WebSocket after allowing final results to arrive
             const currentWs = ws;
             ws = null;
 
             if (currentWs) {
+                if (currentWs.readyState === WebSocket.OPEN) {
+                    try {
+                        currentWs.send(JSON.stringify({ type: 'end_utterance' }));
+                    } catch (e) {}
+
+                    // Allow backend up to 1.2s to deliver translation_final before closing socket
+                    await new Promise((resolve) => {
+                        const originalOnMessage = currentWs.onmessage;
+                        const timer = setTimeout(resolve, 1200);
+
+                        currentWs.onmessage = (event) => {
+                            if (originalOnMessage) {
+                                originalOnMessage(event);
+                            }
+                            try {
+                                const payload = JSON.parse(event.data);
+                                if (payload.type === 'translation_final' || payload.type === 'error' || payload.type === 'language_detection_failed') {
+                                    clearTimeout(timer);
+                                    resolve();
+                                }
+                            } catch {}
+                        };
+                        currentWs.onerror = () => { clearTimeout(timer); resolve(); };
+                        currentWs.onclose = () => { clearTimeout(timer); resolve(); };
+                    });
+                }
+
                 currentWs.onopen = null;
                 currentWs.onmessage = null;
                 currentWs.onerror = null;
                 currentWs.onclose = null;
 
                 try {
-                    if (currentWs.readyState === WebSocket.OPEN) {
-                        currentWs.send(JSON.stringify({ type: 'end_utterance' }));
-                    }
-                } catch (e) {}
-
-                try {
                     currentWs.close();
                 } catch (e) {}
             }
 
-            // 3. Mark session complete in Supabase DB
+            // 3. Mark session complete in Supabase DB if it was an authenticated session
             const currentSessionId = activeSessionId;
             activeSessionId = null;
 
@@ -174,12 +196,12 @@
             isStopping = false;
             setStatus(false);
 
-            if (currentSessionId) {
+            if (currentSessionId && !currentSessionId.startsWith('guest-')) {
                 await completeSession(currentSessionId);
             }
             if (sourceLangBadge) {
                 sourceLangBadge.textContent = sourceLanguageSelect.value === 'Auto'
-                    ? 'Auto-detect'
+                    ? (detectedSourceLanguage || 'Auto-detect')
                     : sourceLanguageSelect.value;
             }
         }
@@ -243,35 +265,68 @@
                     throw new Error('The browser audio context could not be started.');
                 }
 
-                await context.audioWorklet.addModule('/audio_capture_processor.js');
-                if (attemptId !== startAttemptId) return;
+                let processorNode;
+                try {
+                    await context.audioWorklet.addModule('/audio_capture_processor.js');
+                    if (attemptId !== startAttemptId) return;
 
+                    processorNode = new AudioWorkletNode(context, 'audio-capture-processor', {
+                        numberOfInputs: 1,
+                        numberOfOutputs: 1,
+                        outputChannelCount: [1]
+                    });
+                    processorNode.port.onmessage = (event) => {
+                        if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
+                        ws.send(event.data);
+                    };
+                } catch (workletErr) {
+                    console.warn('AudioWorklet unavailable, falling back to ScriptProcessor:', workletErr);
+                    processorNode = context.createScriptProcessor(4096, 1, 1);
+                    processorNode.onaudioprocess = (e) => {
+                        if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
+                        const inputChannel = e.inputBuffer.getChannelData(0);
+                        const pcm16 = new Int16Array(inputChannel.length);
+                        for (let i = 0; i < inputChannel.length; i++) {
+                            const sample = Math.max(-1, Math.min(1, inputChannel[i]));
+                            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+                        }
+                        ws.send(pcm16.buffer);
+                    };
+                }
+
+                processor = processorNode;
                 const source = context.createMediaStreamSource(mediaStream);
-                processor = new AudioWorkletNode(context, 'audio-capture-processor', {
-                    numberOfInputs: 1,
-                    numberOfOutputs: 1,
-                    outputChannelCount: [1]
-                });
-                processor.port.onmessage = (event) => {
-                    if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
-                    ws.send(event.data);
-                };
                 source.connect(processor);
                 processor.connect(context.destination);
 
-                // Create session in Supabase database
-                const sessionRequest = app.createTranslationSession(sourceLanguage, targetLanguage).then((session) => {
-                    if (attemptId !== startAttemptId) {
-                        void app.finishTranslationSession(session.sessionId).catch((error) => {
-                            console.warn('Could not complete cancelled session:', error);
-                        });
-                        return null;
-                    }
-                    return session;
-                });
-                const session = await Promise.race([sessionRequest, cancelled]);
+                // Create session in Supabase database if logged in, otherwise use a guest session
+                let session = null;
+                try {
+                    const sessionPromise = app.createTranslationSession(sourceLanguage, targetLanguage).then((s) => {
+                        if (attemptId !== startAttemptId) {
+                            void app.finishTranslationSession(s.sessionId).catch((error) => {
+                                console.warn('Could not complete cancelled session:', error);
+                            });
+                            return null;
+                        }
+                        return s;
+                    });
+                    session = await Promise.race([sessionPromise, cancelled]);
+                } catch (sessionErr) {
+                    console.info('Using guest translation session:', sessionErr && sessionErr.message);
+                    session = {
+                        sessionId: 'guest-' + Date.now(),
+                        accessToken: 'guest',
+                        sourceLanguageCode: sourceLanguage === 'Auto' ? 'auto' : (languageCodes[sourceLanguage] || 'en'),
+                        targetLanguageCode: languageCodes[targetLanguage] || 'hi',
+                        sourceLanguageId: null,
+                        targetLanguageId: null
+                    };
+                }
                 if (!session || attemptId !== startAttemptId) return;
-                activeSessionId = session.sessionId;
+                if (!session.sessionId.startsWith('guest-')) {
+                    activeSessionId = session.sessionId;
+                }
 
                 const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const newWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
@@ -338,11 +393,23 @@
                         return;
                     }
                     if (data.type === 'translation_partial') {
+                        if (data.language && languageNames[data.language]) {
+                            detectedSourceLanguage = languageNames[data.language];
+                            if (sourceLangBadge) {
+                                sourceLangBadge.textContent = detectedSourceLanguage;
+                            }
+                        }
                         targetTranslation.value = baseTarget + (data.text || '') + '...';
                         targetTranslation.scrollTop = targetTranslation.scrollHeight;
                         return;
                     }
                     if (data.type === 'translation_final') {
+                        if (data.language && languageNames[data.language]) {
+                            detectedSourceLanguage = languageNames[data.language];
+                            if (sourceLangBadge) {
+                                sourceLangBadge.textContent = detectedSourceLanguage;
+                            }
+                        }
                         baseSource += `${currentSource} `;
                         baseTarget += `${data.text || ''} `;
                         currentSource = '';
@@ -457,18 +524,24 @@
         // Debounced Text-to-Text translation when not speaking
         let typingTimer = null;
         sourceTranscript.addEventListener('input', () => {
-            if (ws || starting || isStopping || newStartBtn.disabled) return;
+            if (ws || starting || isStopping) return;
             clearTimeout(typingTimer);
             const text = sourceTranscript.value.trim();
             if (!text) {
                 targetTranslation.value = '';
+                if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
+                    sourceLangBadge.textContent = 'Auto-detect';
+                }
                 return;
+            }
+            if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
+                sourceLangBadge.textContent = 'Detecting...';
             }
             typingTimer = setTimeout(() => {
                 const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const tempWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
                 tempWs.onopen = () => {
-                    const srcCode = languageCodes[sourceLanguageSelect.value] || 'en';
+                    const srcCode = languageCodes[sourceLanguageSelect.value] || 'auto';
                     const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
                     tempWs.send(JSON.stringify({
                         source_language: srcCode,
@@ -482,6 +555,12 @@
                         if (data.translated_text || data.text) {
                             targetTranslation.value = data.translated_text || data.text;
                         }
+                        if (data.language && languageNames[data.language]) {
+                            detectedSourceLanguage = languageNames[data.language];
+                            if (sourceLangBadge) {
+                                sourceLangBadge.textContent = detectedSourceLanguage;
+                            }
+                        }
                         if (data.audio_base64) {
                             const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
                             audio.play().catch(e => console.warn('Audio playback prevented:', e));
@@ -489,7 +568,10 @@
                     } catch {}
                     tempWs.close();
                 };
-            }, 600);
+                tempWs.onerror = () => {
+                    try { tempWs.close(); } catch (e) {}
+                };
+            }, 500);
         });
     }
 
