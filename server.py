@@ -44,6 +44,64 @@ LANGUAGE_MAP = {
     "ml": "ml-IN"
 }
 
+
+def get_asr_backend(source_language: str, deepgram_api_key: str, sarvam_api_key: str):
+    if source_language == "auto":
+        if not sarvam_api_key:
+            raise ValueError("Auto-detection requires SARVAM_API_KEY to be configured.")
+        return (
+            "wss://api.sarvam.ai/speech-to-text-realtime/ws"
+            "?language_code=auto&model=saaras:v4",
+            {"api-subscription-key": sarvam_api_key},
+            "sarvam-saaras-v4",
+            True,
+        )
+
+    use_sarvam = source_language == "ml" or (
+        not deepgram_api_key and bool(sarvam_api_key)
+    )
+    if use_sarvam and sarvam_api_key:
+        sarvam_language = LANGUAGE_MAP.get(source_language, "ml-IN")
+        return (
+            "wss://api.sarvam.ai/speech-to-text-realtime/ws"
+            f"?language_code={sarvam_language}&model=saaras:v4",
+            {"api-subscription-key": sarvam_api_key},
+            "sarvam-saaras-v4",
+            True,
+        )
+    if deepgram_api_key:
+        deepgram_model = "nova-3" if source_language in DRAVIDIAN_LANGUAGES else "nova-2"
+        return (
+            "wss://api.deepgram.com/v1/listen"
+            f"?model={deepgram_model}&encoding=linear16&sample_rate=16000"
+            f"&language={source_language}",
+            {"Authorization": f"Token {deepgram_api_key}"},
+            f"deepgram-{deepgram_model}",
+            False,
+        )
+    return None, {}, "mock-asr", False
+
+
+def normalize_sarvam_language(language: str) -> str | None:
+    if not isinstance(language, str) or not language:
+        return None
+    normalized = language.lower().replace("_", "-").split("-", 1)[0]
+    return normalized if normalized in LANGUAGE_MAP else None
+
+
+def parse_sarvam_transcript(response: dict) -> dict | None:
+    event = response.get("event") or ""
+    transcript = response.get("text") or response.get("transcript") or ""
+    if not transcript or not isinstance(event, str) or not event.startswith("transcript"):
+        return None
+    return {
+        "text": transcript,
+        "is_final": response.get("is_final", event.endswith(".final")),
+        "language": response.get("language"),
+        "language_confidence": response.get("language_confidence"),
+    }
+
+
 def get_supabase_client(token: str = None):
     try:
         from supabase import create_client, ClientOptions
@@ -357,25 +415,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def asr_streaming_handler():
         nonlocal utterance_sequence
+        nonlocal current_source_lang, source_language_id
         while True:
-            # Check ASR provider selection
-            use_sarvam_asr = (current_source_lang == 'ml') or (not DEEPGRAM_API_KEY and bool(SARVAM_API_KEY))
-            
-            if use_sarvam_asr and SARVAM_API_KEY:
-                sarvam_lang = LANGUAGE_MAP.get(current_source_lang, "ml-IN")
-                ws_url = f"wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code={sarvam_lang}&model=saaras:v4"
-                headers = {"api-subscription-key": SARVAM_API_KEY}
-                provider_label = "sarvam-saaras-v4"
-            elif DEEPGRAM_API_KEY:
-                deepgram_model = "nova-3" if current_source_lang in DRAVIDIAN_LANGUAGES else "nova-2"
-                ws_url = f"wss://api.deepgram.com/v1/listen?model={deepgram_model}&encoding=linear16&sample_rate=16000&language={current_source_lang}"
-                headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-                provider_label = f"deepgram-{deepgram_model}"
-            else:
-                # Mock ASR mode for standalone testing without active API keys
-                ws_url = None
-                headers = {}
-                provider_label = "mock-asr"
+            try:
+                backend = get_asr_backend(
+                    current_source_lang, DEEPGRAM_API_KEY, SARVAM_API_KEY
+                )
+            except ValueError as error:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": str(error),
+                }))
+                return
+
+            ws_url, headers, provider_label, use_sarvam_asr = backend
 
             if not ws_url:
                 # Mock ASR loop
@@ -423,6 +476,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     async def receiver():
                         nonlocal utterance_sequence
+                        nonlocal current_source_lang, source_language_id
                         try:
                             while True:
                                 response_str = await ws_backend.recv()
@@ -430,11 +484,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                 transcript = ""
                                 is_final = False
+                                detected_language = None
+                                language_confidence = None
 
                                 if use_sarvam_asr:
-                                    if response_json.get("event") == "transcript":
-                                        transcript = response_json.get("text", "")
-                                        is_final = response_json.get("is_final", False)
+                                    parsed_result = parse_sarvam_transcript(response_json)
+                                    if parsed_result:
+                                        transcript = parsed_result["text"]
+                                        is_final = parsed_result["is_final"]
+                                        detected_language = parsed_result["language"]
+                                        language_confidence = parsed_result["language_confidence"]
                                 else:
                                     is_final = response_json.get("is_final", False)
                                     alternatives = response_json.get("channel", {}).get("alternatives", [])
@@ -442,6 +501,53 @@ async def websocket_endpoint(websocket: WebSocket):
                                         transcript = alternatives[0].get("transcript", "")
 
                                 if transcript:
+                                    if current_source_lang == "auto":
+                                        normalized_language = normalize_sarvam_language(
+                                            detected_language or ""
+                                        )
+                                        if normalized_language:
+                                            current_source_lang = normalized_language
+                                            try:
+                                                language_result = (
+                                                    (db_client or get_supabase_client())
+                                                    .table("supported_languages")
+                                                    .select("id")
+                                                    .eq("code", normalized_language)
+                                                    .maybe_single()
+                                                    .execute()
+                                                )
+                                                if language_result.data:
+                                                    source_language_id = language_result.data["id"]
+                                                    if db_client and session_id:
+                                                        db_client.table("translation_sessions").update({
+                                                            "source_language_id": source_language_id
+                                                        }).eq("id", session_id).execute()
+                                            except Exception as error:
+                                                print(
+                                                    "[Notice] Could not persist detected source language: "
+                                                    f"{error}"
+                                                )
+                                        elif is_final:
+                                            await websocket.send_text(json.dumps({
+                                                "type": "language_detection_failed",
+                                                "message": (
+                                                    "Could not detect a supported source language. "
+                                                    "Please try speaking again."
+                                                ),
+                                            }))
+                                            continue
+                                        else:
+                                            await websocket.send_text(json.dumps({
+                                                "type": "asr_partial",
+                                                "status": "success",
+                                                "text": transcript,
+                                                "original_text": transcript,
+                                                "translated_text": "...",
+                                                "target_language": current_target_lang,
+                                                "is_final": False,
+                                            }))
+                                            continue
+
                                     start_time = time.time()
                                     if is_final:
                                         print(f"[ASR Final] ({current_source_lang}): {transcript}")
@@ -478,7 +584,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                             "status": "success",
                                             "text": transcript,
                                             "original_text": transcript,
-                                            "is_final": True
+                                            "is_final": True,
+                                            "language": current_source_lang,
+                                            "language_confidence": language_confidence
                                         }
                                         payload_trans = {
                                             "type": "translation_final",
@@ -504,7 +612,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                             "original_text": transcript,
                                             "translated_text": "...",
                                             "target_language": current_target_lang,
-                                            "is_final": False
+                                            "is_final": False,
+                                            "language": current_source_lang,
+                                            "language_confidence": language_confidence
                                         }
                                         try:
                                             await websocket.send_text(json.dumps(payload_partial))
@@ -541,6 +651,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
             except Exception as e:
                 print(f"ASR backend connection notice: {e}")
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": (
+                            "Could not connect to the configured speech recognition provider. "
+                            "Check the provider API key and backend log."
+                        ),
+                    }))
+                except Exception:
+                    pass
                 break
 
     receiver_task = asyncio.create_task(frontend_receiver())

@@ -151,6 +151,8 @@ The app loads `dist/app.js`; after changing frontend TypeScript, run the build b
 
 The available Sarvam language codes are `en`, `hi`, `ta`, `te`, `kn`, and `ml`, mapped by the backend to the corresponding `*-IN` provider codes. In Auto-detect mode, Saaras v4 uses Sarvam's adaptive `language_code=auto` streaming mode. The detected language is shown in the source badge and stored with the utterance; the session history uses the first detected language as its source language. Provider output can vary with audio quality, background noise, accents, network latency, API availability, and the selected language pair. Mock mode does not detect spoken languages.
 
+The standalone `server.py` entry point follows the same provider rule: Auto-detect requires `SARVAM_API_KEY` and routes to Sarvam Saaras v4, while manually selected source languages keep their existing Deepgram/Sarvam routing. Deepgram does not accept `language=auto` in this setup.
+
 For a provider-independent persistence check, select mock mode and complete a session. Mock mode returns synthetic transcripts/translations; it is not a demonstration of actual speech recognition quality.
 
 ## Tests and checks
