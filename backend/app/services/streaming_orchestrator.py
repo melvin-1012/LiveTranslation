@@ -115,8 +115,29 @@ class StreamingOrchestrator:
 
     async def process_audio(self, chunk: bytes):
         self.metrics.mark_audio_received()
+        
+        if self.state == StreamingState.PERSISTED:
+            # Sentence reset: previous utterance was finalized.
+            logger.info("SENTENCE_FINALIZED - Starting new utterance.")
+            self.sequence_number += 1
+            try:
+                from app.services.supabase_client import get_supabase_client
+                from app.services.translation_db_service import create_utterance
+                db = get_supabase_client(self.token)
+                res = create_utterance(db, self.session_id, self.sequence_number)
+                self.utterance_id = res["id"]
+            except Exception as e:
+                logger.error(f"Failed to initialize new utterance in DB: {e}")
+                raise ValueError(f"DB Error: {e}")
+            self.state = None
+            from app.core.metrics import TranslationMetricsTracker
+            self.metrics = TranslationMetricsTracker()
+            self.translation_version = 0
+            self.last_asr_text = ""
+            
         if self.state is None:
             await self.transition_state(StreamingState.UTTERANCE_STARTED)
+            
         asr_result = await self.asr.process_audio_chunk(chunk)
         results = asr_result if isinstance(asr_result, list) else [asr_result]
         for result in results:
@@ -130,12 +151,32 @@ class StreamingOrchestrator:
             if result:
                 await self._handle_asr_result(result)
 
-    def _is_stable_partial(self, new_text: str) -> bool:
-        # Task 8: Partial Translation Strategy
-        # Only translate if text length is significantly larger than previous or has boundary
-        if len(new_text.split()) >= len(self.last_asr_text.split()) + 2:
-            return True
-        return False
+    def _is_stable_partial(self, new_text: str) -> tuple[bool, str]:
+        import string
+        def normalize(t):
+            return t.lower().translate(str.maketrans('', '', string.punctuation)).split()
+            
+        last_words = normalize(self.last_asr_text)
+        new_words = normalize(new_text)
+        
+        if last_words == new_words:
+            return False, "duplicate"
+            
+        common_prefix = 0
+        for w1, w2 in zip(last_words, new_words):
+            if w1 == w2:
+                common_prefix += 1
+            else:
+                break
+                
+        if common_prefix < len(last_words):
+            return True, "correction"
+            
+        added_words = len(new_words) - common_prefix
+        if added_words >= 2:
+            return True, "extension"
+            
+        return False, "insignificant"
 
     async def _handle_asr_result(self, asr_result: dict):
         is_final = asr_result.get("is_final", False)
@@ -234,8 +275,22 @@ class StreamingOrchestrator:
             return
 
         # Partial translation strategy check
-        if not is_final and not self._is_stable_partial(text):
-            return
+        if not is_final:
+            self.metrics.increment_candidate()
+            is_stable, reason = self._is_stable_partial(text)
+            if not is_stable:
+                self.metrics.increment_suppressed()
+                logger.info(f"PARTIAL_TRANSLATION_SUPPRESSED ({reason})")
+                return
+            else:
+                self.metrics.increment_emitted()
+                if reason == "correction":
+                    logger.info("TRANSLATION_CORRECTION")
+                    self.metrics.increment_rewrite()
+                else:
+                    logger.info(f"PARTIAL_TRANSLATION_EMITTED ({reason})")
+        else:
+            logger.info("PARTIAL_TRANSLATION_CANDIDATE (is_final)")
 
         self.last_asr_text = text
 
