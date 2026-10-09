@@ -1514,7 +1514,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const preferredTarget = profile?.preferred_target_language_id
       ? languageNameById.get(profile.preferred_target_language_id)
       : undefined;
-    if (preferredSource && sourceLanguageSelect) sourceLanguageSelect.value = preferredSource;
+    if (sourceLanguageSelect) {
+      sourceLanguageSelect.value = preferredSource || 'Auto';
+    }
     if (preferredTarget && targetLanguageSelect) targetLanguageSelect.value = preferredTarget;
     updateLanguageBadges();
   }

@@ -99,37 +99,55 @@ class SarvamASRService(ASRService):
             logger.error(f"Sarvam ASR Receive loop error: {e}")
             self.is_connected = False
 
-    async def process_audio_chunk(self, chunk: bytes) -> Optional[dict]:
+    async def process_audio_chunk(self, chunk: bytes) -> Optional[dict | list[dict]]:
         if self.is_connected and chunk:
             try:
                 b64 = base64.b64encode(chunk).decode("utf-8")
                 await self.ws.send(json.dumps({"event": "audio_input", "audio": b64}))
             except Exception as e:
-                logger.error(f"Sarvam ASR Send Error: {e}")
+                logger.exception("Sarvam ASR send failed")
                 self.is_connected = False
-                
-        # Drain queue if any results
-        if not self.result_queue.empty():
-            return await self.result_queue.get()
-        return None
+                raise RuntimeError("Could not send audio to Sarvam ASR") from e
 
-    async def finalize(self) -> Optional[dict]:
+        results = []
+        while True:
+            try:
+                results.append(self.result_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not results:
+            return None
+        return results[0] if len(results) == 1 else results
+
+    async def finalize(self) -> Optional[dict | list[dict]]:
+        results = []
         if self.is_connected:
             try:
                 await self.ws.send(json.dumps({"event": "flush"}))
-                try:
-                    res = await asyncio.wait_for(self.result_queue.get(), timeout=2.0)
-                    return res
-                except asyncio.TimeoutError:
-                    pass
+                while True:
+                    try:
+                        result = await asyncio.wait_for(self.result_queue.get(), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("Timed out waiting for Sarvam final transcript after flush")
+                        break
+                    results.append(result)
+                    if result.get("is_final"):
+                        break
             except Exception as e:
-                logger.error(f"Sarvam ASR Finalize Error: {e}")
-        return None
+                logger.exception("Sarvam ASR finalization failed")
+                raise RuntimeError("Could not finalize Sarvam ASR stream") from e
+        if not results:
+            return None
+        return results[0] if len(results) == 1 else results
 
     async def close(self):
         self.is_connected = False
         if self.receive_task:
             self.receive_task.cancel()
+            try:
+                await self.receive_task
+            except asyncio.CancelledError:
+                pass
         if self.ws:
             await self.ws.close()
 

@@ -18,9 +18,9 @@ class ASRService(ABC):
     @abstractmethod
     async def start_stream(self, config: dict): pass
     @abstractmethod
-    async def process_audio_chunk(self, chunk: bytes) -> Optional[dict]: pass
+    async def process_audio_chunk(self, chunk: bytes) -> Optional[dict | list[dict]]: pass
     @abstractmethod
-    async def finalize(self) -> Optional[dict]: pass
+    async def finalize(self) -> Optional[dict | list[dict]]: pass
     @abstractmethod
     async def close(self): pass
 
@@ -100,13 +100,17 @@ class StreamingOrchestrator:
         if self.state is None:
             await self.transition_state(StreamingState.UTTERANCE_STARTED)
         asr_result = await self.asr.process_audio_chunk(chunk)
-        if asr_result:
-            await self._handle_asr_result(asr_result)
+        results = asr_result if isinstance(asr_result, list) else [asr_result]
+        for result in results:
+            if result:
+                await self._handle_asr_result(result)
 
     async def finalize(self):
         asr_result = await self.asr.finalize()
-        if asr_result:
-            await self._handle_asr_result(asr_result)
+        results = asr_result if isinstance(asr_result, list) else [asr_result]
+        for result in results:
+            if result:
+                await self._handle_asr_result(result)
 
     def _is_stable_partial(self, new_text: str) -> bool:
         # Task 8: Partial Translation Strategy

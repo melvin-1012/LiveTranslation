@@ -111,6 +111,50 @@ async def test_reads_detected_language_and_confidence_from_realtime_event() -> N
 
 
 @pytest.mark.asyncio
+async def test_audio_chunk_drains_all_queued_transcription_events() -> None:
+    service = sarvam.SarvamASRService()
+    service.is_connected = True
+    service.ws = type("Socket", (), {"send": lambda self, payload: asyncio.sleep(0)})()
+    await service.result_queue.put({"text": "வணக்கம்", "is_final": False, "language": "ta-IN"})
+    await service.result_queue.put({"text": "வணக்கம்", "is_final": True, "language": "ta-IN"})
+
+    results = await service.process_audio_chunk(b"audio")
+
+    assert results == [
+        {"text": "வணக்கம்", "is_final": False, "language": "ta-IN"},
+        {"text": "வணக்கம்", "is_final": True, "language": "ta-IN"},
+    ]
+    assert service.result_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_finalize_collects_queued_partials_until_final() -> None:
+    class Socket:
+        async def send(self, payload):
+            await service.result_queue.put(
+                {"text": "வணக்கம்", "is_final": False, "language": "ta-IN"}
+            )
+            await service.result_queue.put(
+                {
+                    "text": "வணக்கம்",
+                    "is_final": True,
+                    "language": "ta-IN",
+                    "language_confidence": 0.99,
+                }
+            )
+
+    service = sarvam.SarvamASRService()
+    service.is_connected = True
+    service.ws = Socket()
+
+    results = await service.finalize()
+
+    assert len(results) == 2
+    assert results[-1]["is_final"] is True
+    assert results[-1]["language_confidence"] == 0.99
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("source", "target", "expected_source", "expected_target"),
     [
