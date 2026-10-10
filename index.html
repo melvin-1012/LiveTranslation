@@ -79,6 +79,19 @@
 
     <!-- Language Selection Card -->
     <section class="language-selection-card">
+      <div class="conversation-mode-row">
+        <label for="translationMode" class="field-label">Translation mode</label>
+        <div class="select-wrapper mode-select-wrapper">
+          <select id="translationMode" class="custom-select">
+            <option value="one-way" selected>One-way translation</option>
+            <option value="conversation">Two-way conversation</option>
+          </select>
+          <span class="select-arrow">▼</span>
+        </div>
+        <p id="conversationModeHint" class="preferences-hint hidden">
+          Choose the two languages participants will speak. Turns are labeled by detected language, not by identity.
+        </p>
+      </div>
       <div class="lang-selectors-row">
         <div class="selector-col">
           <label for="sourceLanguage" class="field-label">
@@ -212,6 +225,19 @@
 
     <!-- Real-Time Text Workspace -->
     <main class="translation-workspace">
+      <section id="conversationPanel" class="panel-card conversation-panel hidden" aria-live="polite">
+        <header class="panel-header">
+          <div class="panel-title-wrap">
+            <div>
+              <h2 class="panel-title">Conversation</h2>
+              <span class="panel-language-badge">Turns labeled by language</span>
+            </div>
+          </div>
+          <span id="conversationTurnStatus" class="state-hint">Waiting for speech</span>
+        </header>
+        <div id="conversationTurns" class="conversation-turns"></div>
+        <p id="conversationPreview" class="conversation-preview hidden" aria-live="polite"></p>
+      </section>
       <!-- Section 1: Live Recognized Speech -->
       <section class="panel-card source-panel">
         <header class="panel-header">

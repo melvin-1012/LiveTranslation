@@ -113,6 +113,41 @@ def normalize_sarvam_language(language: str) -> str | None:
     return normalized if normalized in LANGUAGE_MAP else None
 
 
+def resolve_conversation_turn(
+    text: str,
+    detected_language: str | None,
+    language_confidence: float | str | None,
+    languages: list[str],
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve a final turn to the selected pair, or return a correction reason."""
+    script_language = detect_script_language(text)
+    provider_language = normalize_sarvam_language(detected_language or "")
+    raw_provider_language = (
+        detected_language.lower().replace("_", "-").split("-", 1)[0]
+        if isinstance(detected_language, str) and detected_language
+        else None
+    )
+
+    # Indic script is stronger evidence than a conflicting provider guess.
+    candidate = (
+        script_language
+        if script_language in {"hi", "ta", "te", "kn", "ml"}
+        else (provider_language or raw_provider_language or script_language)
+    )
+    if language_confidence is not None:
+        try:
+            if not 0.6 <= float(language_confidence) <= 1.0:
+                return None, None, "uncertain"
+        except (TypeError, ValueError):
+            return None, None, "uncertain"
+    if candidate is None:
+        return None, None, "uncertain"
+    if candidate not in languages:
+        return candidate, None, "outside_pair"
+    target_language = languages[1] if candidate == languages[0] else languages[0]
+    return candidate, target_language, None
+
+
 def normalize_lang_code(lang: str | None) -> str:
     if not lang or not isinstance(lang, str):
         return "auto"
@@ -537,6 +572,9 @@ async def websocket_endpoint(websocket: WebSocket):
     current_target_lang = "hi"
     current_source_lang = None
     is_auto_detect = False
+    conversation_mode = False
+    conversation_languages = []
+    conversation_language_ids = {}
     session_id = None
     source_language_id = None
     target_language_id = None
@@ -544,11 +582,13 @@ async def websocket_endpoint(websocket: WebSocket):
     db_client = None
 
     utterance_sequence = 0
+    conversation_turn_sequence = 0
     message_queue = asyncio.Queue()
     config_received = asyncio.Event()
 
     async def frontend_receiver():
         nonlocal current_target_lang, current_source_lang, is_auto_detect, session_id
+        nonlocal conversation_mode, conversation_languages, conversation_language_ids
         nonlocal source_language_id, target_language_id, user_token, db_client
         try:
             while True:
@@ -578,6 +618,28 @@ async def websocket_endpoint(websocket: WebSocket):
                             source_language_id = data["source_language_id"]
                         if "target_language_id" in data:
                             target_language_id = data["target_language_id"]
+                        if "conversation_mode" in data:
+                            conversation_mode = data["conversation_mode"] is True
+                            selected_languages = data.get("conversation_languages")
+                            if conversation_mode and (
+                                not isinstance(selected_languages, list)
+                                or len(selected_languages) != 2
+                                or any(lang not in LANGUAGE_MAP for lang in selected_languages)
+                                or selected_languages[0] == selected_languages[1]
+                            ):
+                                await websocket.send_text(json.dumps({
+                                    "type": "error",
+                                    "title": "Invalid conversation languages",
+                                    "message": "Choose two different supported languages for Conversation Mode.",
+                                }))
+                                await message_queue.put({"type": "disconnect"})
+                                return
+                            conversation_languages = selected_languages or []
+                            if conversation_mode:
+                                conversation_language_ids = {
+                                    conversation_languages[0]: source_language_id,
+                                    conversation_languages[1]: target_language_id,
+                                }
 
                         # Text-to-Text translation request - handle immediately without triggering ASR loop
                         if "text_to_translate" in data:
@@ -592,7 +654,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             effective_src = src_norm
                             if effective_src == "auto":
                                 effective_src = script_lang or "en"
-                            elif script_lang and script_lang != effective_src:
+                            elif not data.get("conversation_correction") and script_lang and script_lang != effective_src:
                                 effective_src = script_lang
 
                             translated, provider = await route_translation(
@@ -621,6 +683,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "provider": provider,
                                 "audio_base64": audio_b64
                             }
+                            if data.get("turn_id") is not None:
+                                payload["turn_id"] = data["turn_id"]
                             await websocket.send_text(json.dumps(payload))
                             continue
 
@@ -633,6 +697,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         if "source_language" in data:
                             current_source_lang = data["source_language"]
                             is_auto_detect = (current_source_lang == "auto")
+                            if conversation_mode:
+                                current_source_lang = "auto"
+                                is_auto_detect = True
+                                current_target_lang = conversation_languages[1]
                             config_received.set()
                             if old_source is not None and current_source_lang != old_source:
                                 print(f"[Lang] Source language switch: {old_source} -> {current_source_lang}")
@@ -658,6 +726,8 @@ async def websocket_endpoint(websocket: WebSocket):
     async def asr_streaming_handler():
         nonlocal utterance_sequence
         nonlocal current_source_lang, source_language_id, is_auto_detect, current_target_lang
+        nonlocal conversation_mode, conversation_languages, conversation_turn_sequence
+        nonlocal source_language_id, target_language_id
 
         # Wait for initial frontend configuration (or audio/disconnect)
         try:
@@ -744,7 +814,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     async def receiver():
                         nonlocal utterance_sequence
-                        nonlocal current_source_lang, source_language_id, is_auto_detect
+                        nonlocal current_source_lang, current_target_lang
+                        nonlocal source_language_id, target_language_id, is_auto_detect
+                        nonlocal conversation_turn_sequence
                         try:
                             while True:
                                 response_str = await ws_backend.recv()
@@ -800,6 +872,36 @@ async def websocket_endpoint(websocket: WebSocket):
                                         transcript = alternatives[0].get("transcript", "")
 
                                 if transcript:
+                                    conversation_turn_id = None
+                                    if conversation_mode and is_final:
+                                        conversation_turn_sequence += 1
+                                        conversation_turn_id = conversation_turn_sequence
+                                        detected, turn_target, detection_issue = resolve_conversation_turn(
+                                            transcript,
+                                            detected_language,
+                                            language_confidence,
+                                            conversation_languages,
+                                        )
+                                        if detection_issue:
+                                            await websocket.send_text(json.dumps({
+                                                "type": "language_detection_failed",
+                                                "turn_id": conversation_turn_id,
+                                                "text": transcript,
+                                                "language": detected,
+                                                "conversation_languages": conversation_languages,
+                                                "reason": detection_issue,
+                                                "message": (
+                                                    "Language detection was uncertain. Choose the language for this turn."
+                                                    if detection_issue == "uncertain"
+                                                    else "This turn was not in either selected conversation language. Choose its language to translate it."
+                                                ),
+                                            }))
+                                            continue
+                                        current_source_lang = detected
+                                        current_target_lang = turn_target
+                                        source_language_id = conversation_language_ids.get(current_source_lang)
+                                        target_language_id = conversation_language_ids.get(current_target_lang)
+
                                     if is_auto_detect:
                                         script_lang = detect_script_language(transcript)
                                         sarvam_lang = normalize_sarvam_language(detected_language or "")
@@ -956,6 +1058,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                             "latency_ms": calc_latency,
                                             "audio_base64": cached_tts_audio
                                         }
+                                        if conversation_mode:
+                                            payload_asr["turn_id"] = conversation_turn_id
+                                            payload_trans["turn_id"] = conversation_turn_id
                                         try:
                                             await websocket.send_text(json.dumps(payload_asr))
                                             await websocket.send_text(json.dumps(payload_trans))

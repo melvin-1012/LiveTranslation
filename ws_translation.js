@@ -48,6 +48,14 @@
         const targetTranslation = document.getElementById('targetTranslation');
         const sourceLanguageSelect = document.getElementById('sourceLanguage');
         const targetLanguageSelect = document.getElementById('targetLanguage');
+        const translationMode = document.getElementById('translationMode');
+        const conversationModeHint = document.getElementById('conversationModeHint');
+        const conversationPanel = document.getElementById('conversationPanel');
+        const conversationTurns = document.getElementById('conversationTurns');
+        const conversationPreview = document.getElementById('conversationPreview');
+        const conversationTurnStatus = document.getElementById('conversationTurnStatus');
+        const sourcePanel = document.querySelector('.source-panel');
+        const targetPanel = document.querySelector('.target-panel');
         const sourceLangBadge = document.getElementById('sourceLangBadge');
         const targetLangBadge = document.getElementById('targetLangBadge');
         const startBtnText = document.getElementById('startBtnText');
@@ -111,11 +119,16 @@
         let languageRestartPending = false;
         let startAttemptId = 0;
         let cancelPendingStart = null;
+        const conversationTurnCards = new Map();
 
         function setStatus(listening) {
             newStartBtn.disabled = listening || starting;
             newStopBtn.disabled = !listening && !starting;
-            if (startBtnText) startBtnText.textContent = listening ? 'Listening...' : 'Start Speaking';
+            if (startBtnText) {
+                startBtnText.textContent = listening
+                    ? (translationMode && translationMode.value === 'conversation' ? 'Conversation Active' : 'Listening...')
+                    : (translationMode && translationMode.value === 'conversation' ? 'Start Conversation' : 'Start Speaking');
+            }
             if (statusText) statusText.textContent = listening ? 'Live Streaming' : 'Ready';
             if (statusBadge) {
                 statusBadge.className = listening
@@ -126,6 +139,116 @@
             if (app && app.setStatus) {
                 app.setStatus(listening ? 'listening' : 'ready');
             }
+        }
+
+        function isConversationMode() {
+            return Boolean(translationMode && translationMode.value === 'conversation');
+        }
+
+        function updateModeUI() {
+            const conversation = isConversationMode();
+            const sourceLabel = document.querySelector('label[for="sourceLanguage"]');
+            const targetLabel = document.querySelector('label[for="targetLanguage"]');
+            if (sourceLabel) sourceLabel.lastChild.textContent = conversation ? ' First Language' : ' Source Language (Speaking)';
+            if (targetLabel) targetLabel.lastChild.textContent = conversation ? ' Second Language' : ' Target Language (Translation)';
+            if (swapBtn) swapBtn.classList.toggle('hidden', conversation);
+            if (conversationModeHint) conversationModeHint.classList.toggle('hidden', !conversation);
+            if (conversationPanel) conversationPanel.classList.toggle('hidden', !conversation);
+            if (sourcePanel) sourcePanel.classList.toggle('hidden', conversation);
+            if (targetPanel) targetPanel.classList.toggle('hidden', conversation);
+            if (sourceLanguageSelect) {
+                const autoOption = sourceLanguageSelect.querySelector('option[value="Auto"]');
+                if (autoOption) autoOption.disabled = conversation;
+                if (conversation && sourceLanguageSelect.value === 'Auto') {
+                    sourceLanguageSelect.value = 'English';
+                    if (targetLanguageSelect.value === 'English') targetLanguageSelect.value = 'Tamil';
+                }
+            }
+            if (conversationTurnStatus) {
+                conversationTurnStatus.textContent = ws ? 'Listening for either language' : 'Waiting for speech';
+            }
+            if (startBtnText && !ws && !starting) {
+                startBtnText.textContent = conversation ? 'Start Conversation' : 'Start Speaking';
+            }
+        }
+
+        function renderConversationTurn(turn) {
+            if (!conversationTurns) return;
+            const key = turn.turnId == null ? `local-${conversationTurns.children.length}` : String(turn.turnId);
+            let card = conversationTurnCards.get(key);
+            if (!card) {
+                card = document.createElement('article');
+                card.className = 'conversation-turn';
+                card.dataset.turnId = key;
+                const label = document.createElement('div');
+                label.className = 'conversation-turn-label';
+                const original = document.createElement('div');
+                original.className = 'conversation-turn-original';
+                const translated = document.createElement('div');
+                translated.className = 'conversation-turn-translation';
+                card.append(label, original, translated);
+                conversationTurns.appendChild(card);
+                conversationTurnCards.set(key, card);
+            }
+
+            const [label, original, translated] = card.children;
+            const sourceName = languageNames[turn.language] || null;
+            const targetName = languageNames[turn.targetLanguage] || null;
+            label.textContent = sourceName && targetName
+                ? `${sourceName} → ${targetName}`
+                : 'Language uncertain — choose the language for this turn';
+            original.textContent = turn.originalText || '';
+            translated.textContent = turn.translatedText
+                ? `Translation: ${turn.translatedText}`
+                : (turn.message || 'Not translated yet.');
+            card.classList.toggle('is-uncertain', Boolean(turn.uncertain));
+
+            const oldCorrection = card.querySelector('.conversation-correction');
+            if (oldCorrection) oldCorrection.remove();
+            if (turn.uncertain) {
+                const correction = document.createElement('div');
+                correction.className = 'conversation-correction';
+                const select = document.createElement('select');
+                select.className = 'custom-select';
+                for (const [name, code] of Object.entries(languageCodes)) {
+                    if (code === 'auto' || ![languageCodes[sourceLanguageSelect.value], languageCodes[targetLanguageSelect.value]].includes(code)) continue;
+                    const option = document.createElement('option');
+                    option.value = code;
+                    option.textContent = languageNames[code] || name;
+                    select.appendChild(option);
+                }
+                if (turn.language && [...select.options].some((option) => option.value === turn.language)) {
+                    select.value = turn.language;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-secondary';
+                button.textContent = 'Correct & translate';
+                button.addEventListener('click', () => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        reportError('Conversation is not active', 'Start the conversation again before correcting this turn.');
+                        return;
+                    }
+                    const source = select.value;
+                    const first = languageCodes[sourceLanguageSelect.value];
+                    const target = source === first
+                        ? languageCodes[targetLanguageSelect.value]
+                        : first;
+                    button.disabled = true;
+                    translated.textContent = 'Translation: translating…';
+                    ws.send(JSON.stringify({
+                        text_to_translate: turn.originalText,
+                        source_language: source,
+                        target_language: target,
+                        conversation_correction: true,
+                        turn_id: turn.turnId,
+                        include_speech: true
+                    }));
+                });
+                correction.append(select, button);
+                card.appendChild(correction);
+            }
+            conversationTurns.scrollTop = conversationTurns.scrollHeight;
         }
 
         function reportError(title, message, alertType = 'connection-error') {
@@ -205,7 +328,6 @@
 
             // 2. Tear down active WebSocket after allowing final results to arrive
             const currentWs = ws;
-            ws = null;
 
             if (currentWs) {
                 if (currentWs.readyState === WebSocket.OPEN) {
@@ -235,6 +357,7 @@
                     });
                 }
 
+                if (ws === currentWs) ws = null;
                 currentWs.onopen = null;
                 currentWs.onmessage = null;
                 currentWs.onerror = null;
@@ -273,7 +396,12 @@
 
             const sourceLanguage = sourceLanguageSelect.value;
             const targetLanguage = targetLanguageSelect.value;
+            const conversationMode = isConversationMode();
 
+            if (conversationMode && sourceLanguage === 'Auto') {
+                reportError('Choose both languages', 'Conversation Mode requires two selected languages.');
+                return;
+            }
             if (sourceLanguage !== 'Auto' && sourceLanguage === targetLanguage) {
                 reportError('Invalid Language Pair', 'Please choose two different languages for translation.');
                 return;
@@ -291,10 +419,23 @@
 
             sourceTranscript.value = '';
             targetTranslation.value = '';
+            if (conversationTurns) conversationTurns.replaceChildren();
+            conversationTurnCards.clear();
+            if (conversationPreview) {
+                conversationPreview.textContent = '';
+                conversationPreview.classList.add('hidden');
+            }
             baseSource = '';
             baseTarget = '';
             currentSource = '';
             detectedSourceLanguage = null;
+            if (conversationTurns) conversationTurns.replaceChildren();
+            conversationTurnCards.clear();
+            if (conversationPreview) {
+                conversationPreview.textContent = '';
+                conversationPreview.classList.add('hidden');
+            }
+            updateModeUI();
             if (sourceLangBadge) {
                 sourceLangBadge.textContent = sourceLanguage === 'Auto'
                     ? 'Detecting...'
@@ -396,11 +537,15 @@
                     }
                     newWs.send(JSON.stringify({
                         session_id: session.sessionId,
-                        source_language: session.sourceLanguageCode,
+                        source_language: conversationMode ? 'auto' : session.sourceLanguageCode,
                         target_language: session.targetLanguageCode,
                         source_language_id: session.sourceLanguageId,
                         target_language_id: session.targetLanguageId,
-                        token: session.accessToken
+                        token: session.accessToken,
+                        conversation_mode: conversationMode,
+                        conversation_languages: conversationMode
+                            ? [languageCodes[sourceLanguage], languageCodes[targetLanguage]]
+                            : undefined
                     }));
                     starting = false;
                     setStatus(true);
@@ -467,6 +612,22 @@
                         return;
                     }
                     if (data.type === 'language_detection_failed') {
+                        if (conversationMode) {
+                            if (conversationTurnStatus) conversationTurnStatus.textContent = 'Language needs confirmation';
+                            renderConversationTurn({
+                                turnId: data.turn_id,
+                                language: data.language,
+                                originalText: data.text || currentSource,
+                                message: data.message || 'Choose the language for this turn.',
+                                uncertain: true
+                            });
+                            currentSource = '';
+                            if (conversationPreview) {
+                                conversationPreview.textContent = '';
+                                conversationPreview.classList.add('hidden');
+                            }
+                            return;
+                        }
                         reportError('Language not recognized', data.message || 'Please try speaking again.');
                         void stopListening();
                         return;
@@ -479,6 +640,15 @@
                             }
                         }
                         currentSource = data.text || '';
+                        if (conversationMode) {
+                            if (conversationPreview) {
+                                conversationPreview.textContent = currentSource
+                                    ? `Hearing: ${currentSource}`
+                                    : '';
+                                conversationPreview.classList.toggle('hidden', !currentSource);
+                            }
+                            return;
+                        }
                         updateTextPanels();
                         return;
                     }
@@ -500,6 +670,26 @@
                             if (sourceLangBadge) {
                                 sourceLangBadge.textContent = detectedSourceLanguage;
                             }
+                        }
+                        if (conversationMode) {
+                            renderConversationTurn({
+                                turnId: data.turn_id,
+                                language: data.language,
+                                targetLanguage: data.target_language,
+                                originalText: data.original_text || currentSource,
+                                translatedText: data.text || data.translated_text || ''
+                            });
+                            currentSource = '';
+                            if (conversationPreview) {
+                                conversationPreview.textContent = '';
+                                conversationPreview.classList.add('hidden');
+                            }
+                            if (conversationTurnStatus) conversationTurnStatus.textContent = 'Listening for either language';
+                            if (data.audio_base64) {
+                                const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                                audio.play().catch(e => console.warn('Audio playback prevented:', e));
+                            }
+                            return;
                         }
                         baseSource += `${currentSource} `;
                         baseTarget += `${data.text || ''} `;
@@ -641,6 +831,15 @@
                 }, 50);
             });
         }
+
+        if (translationMode) {
+            translationMode.addEventListener('change', () => {
+                updateModeUI();
+                if (ws || starting) void handleLanguageChange();
+            });
+        }
+
+        updateModeUI();
 
         // Dedicated Text-to-Text translation system
         let typingTimer = null;

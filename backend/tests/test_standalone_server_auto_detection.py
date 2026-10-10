@@ -96,6 +96,27 @@ def test_detect_script_language(text: str, expected: str | None) -> None:
     assert server.detect_script_language(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "detected", "confidence", "pair", "expected"),
+    [
+        ("வணக்கம்", "ta-IN", 0.98, ["ta", "en"], ("ta", "en", None)),
+        ("Hello there", "en-IN", 0.95, ["ta", "en"], ("en", "ta", None)),
+        ("नमस्ते", "hi-IN", 0.99, ["ta", "en"], ("hi", None, "outside_pair")),
+        ("বাঙালি", "bn-IN", 0.95, ["ta", "en"], ("bn", None, "outside_pair")),
+        ("Hello there", "en-IN", 0.2, ["ta", "en"], (None, None, "uncertain")),
+        ("", None, None, ["ta", "en"], (None, None, "uncertain")),
+    ],
+)
+def test_resolves_conversation_turn_direction_or_requires_correction(
+    text: str,
+    detected: str | None,
+    confidence: float | None,
+    pair: list[str],
+    expected: tuple[str | None, str | None, str | None],
+) -> None:
+    assert server.resolve_conversation_turn(text, detected, confidence, pair) == expected
+
+
 @pytest.mark.asyncio
 async def test_route_translation_same_language() -> None:
     res, provider = await server.route_translation("क्या हाल है?", "hi", "hi")

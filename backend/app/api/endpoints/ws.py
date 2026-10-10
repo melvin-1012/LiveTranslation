@@ -50,10 +50,12 @@ async def websocket_translate(websocket: WebSocket):
                     "type": "translation_final",
                     "status": "success",
                     "text": translated,
+                    "original_text": txt,
                     "translated_text": translated,
                     "language": src,
                     "target_language": tgt,
-                    "is_final": True
+                    "is_final": True,
+                    "turn_id": config.get("turn_id"),
                 })
                 await websocket.close()
                 return
@@ -125,10 +127,12 @@ async def websocket_translate(websocket: WebSocket):
                         "type": "translation_final",
                         "status": "success",
                         "text": translated,
+                        "original_text": txt,
                         "translated_text": translated,
                         "language": src,
                         "target_language": tgt,
-                        "is_final": True
+                        "is_final": True,
+                        "turn_id": data.get("turn_id"),
                     })
 
     except WebSocketDisconnect:

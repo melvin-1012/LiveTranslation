@@ -197,6 +197,115 @@ async def test_auto_detected_language_drives_translation_and_persistence(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_conversation_mode_translates_each_completed_turn_in_both_directions(monkeypatch):
+    class AlternatingASR(MockASRService):
+        def __init__(self):
+            self.results = [
+                {"text": "வணக்கம்", "is_final": True, "language": "ta-IN", "language_confidence": 0.98},
+                {"text": "Hello", "is_final": True, "language": "en-IN", "language_confidence": 0.98},
+            ]
+
+        async def process_audio_chunk(self, chunk: bytes):
+            return self.results.pop(0)
+
+    class RecordingTranslator(MockTranslationService):
+        def __init__(self):
+            self.pairs = []
+
+        async def translate_final(self, text, source_lang, target_lang, glossary=None):
+            self.pairs.append((source_lang, target_lang))
+            return {"translated_text": f"{source_lang}-{target_lang}: {text}"}
+
+    monkeypatch.setattr(
+        "app.services.streaming_orchestrator.get_supabase_client",
+        lambda token: None,
+    )
+    websocket = MockWebSocket()
+    translator = RecordingTranslator()
+    orchestrator = StreamingOrchestrator(AlternatingASR(), translator, websocket)
+    await orchestrator.handle_config({
+        "session_id": "guest-conversation",
+        "source_language": "auto",
+        "target_language": "en",
+        "conversation_mode": True,
+        "conversation_languages": ["ta", "en"],
+        "token": "guest",
+    })
+
+    await orchestrator.process_audio(b"turn 1")
+    await orchestrator.process_audio(b"turn 2")
+
+    finals = [message for message in websocket.sent_messages if message["type"] == "translation_final"]
+    assert translator.pairs == [("ta", "en"), ("en", "ta")]
+    assert [(message["language"], message["target_language"]) for message in finals] == [
+        ("ta", "en"),
+        ("en", "ta"),
+    ]
+    assert [message["turn_id"] for message in finals] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_conversation_mode_requests_correction_for_uncertain_language(monkeypatch):
+    class UncertainASR(MockASRService):
+        async def process_audio_chunk(self, chunk: bytes):
+            return {
+                "text": "Hello",
+                "is_final": True,
+                "language": "en-IN",
+                "language_confidence": 0.2,
+            }
+
+    class MustNotTranslate(MockTranslationService):
+        async def translate_final(self, text, source_lang, target_lang, glossary=None):
+            raise AssertionError("uncertain turns must wait for user correction")
+
+    monkeypatch.setattr(
+        "app.services.streaming_orchestrator.get_supabase_client",
+        lambda token: None,
+    )
+    websocket = MockWebSocket()
+    orchestrator = StreamingOrchestrator(UncertainASR(), MustNotTranslate(), websocket)
+    await orchestrator.handle_config({
+        "session_id": "guest-conversation",
+        "source_language": "auto",
+        "target_language": "en",
+        "conversation_mode": True,
+        "conversation_languages": ["ta", "en"],
+        "token": "guest",
+    })
+
+    await orchestrator.process_audio(b"uncertain turn")
+
+    failure = next(
+        message
+        for message in websocket.sent_messages
+        if message["type"] == "language_detection_failed"
+    )
+    assert failure["reason"] == "uncertain"
+    assert failure["text"] == "Hello"
+    assert failure["turn_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_one_way_orchestrator_configuration_remains_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.streaming_orchestrator.get_supabase_client",
+        lambda token: None,
+    )
+    orchestrator = StreamingOrchestrator(MockASRService(), MockTranslationService(), MockWebSocket())
+    await orchestrator.handle_config({
+        "session_id": "guest-one-way",
+        "source_language": "en",
+        "target_language": "ta",
+        "token": "guest",
+    })
+
+    assert orchestrator.conversation_mode is False
+    assert orchestrator.source_lang == "en"
+    assert orchestrator.target_lang == "ta"
+
+
+@pytest.mark.asyncio
 async def test_manual_source_language_is_not_overridden_by_asr_metadata(monkeypatch):
     class ConflictingASR(MockASRService):
         async def process_audio_chunk(self, chunk: bytes):

@@ -83,6 +83,9 @@ class StreamingOrchestrator:
         self.language_id_cache = {}
         self.session_source_language_set = False
         self.auto_detect = False
+        self.conversation_mode = False
+        self.conversation_languages = []
+        self.conversation_turn_sequence = 0
 
     async def transition_state(self, new_state: StreamingState):
         if not is_valid_transition(self.state, new_state):
@@ -91,7 +94,16 @@ class StreamingOrchestrator:
 
     async def handle_config(self, config: dict):
         configured_source = config.get("source_language")
-        self.auto_detect = configured_source == "auto"
+        self.conversation_mode = config.get("conversation_mode") is True
+        self.conversation_languages = config.get("conversation_languages") or []
+        if self.conversation_mode and (
+            not isinstance(self.conversation_languages, list)
+            or len(self.conversation_languages) != 2
+            or any(lang not in {"en", "hi", "ta", "te", "kn", "ml"} for lang in self.conversation_languages)
+            or self.conversation_languages[0] == self.conversation_languages[1]
+        ):
+            raise ValueError("Conversation Mode requires two different supported languages.")
+        self.auto_detect = self.conversation_mode or configured_source == "auto"
         self.source_lang = None if configured_source == "auto" else configured_source
         self.target_lang = config.get("target_language")
         self.session_id = config.get("session_id")
@@ -141,6 +153,87 @@ class StreamingOrchestrator:
         is_final = asr_result.get("is_final", False)
         text = asr_result.get("text", "")
         detected_language = asr_result.get("language")
+        if self.conversation_mode and self.state in {
+            StreamingState.PERSISTED,
+            StreamingState.ASR_FINAL,
+        }:
+            self.state = None
+            await self.transition_state(StreamingState.UTTERANCE_STARTED)
+
+        if self.conversation_mode:
+            if not is_final:
+                await self._emit_ws({
+                    "type": "asr_partial",
+                    "text": text,
+                    "is_final": False,
+                    "language": detect_script_language(text) or detected_language,
+                })
+                return
+
+            self.conversation_turn_sequence += 1
+            conversation_turn_id = self.conversation_turn_sequence
+            from app.services.providers.sarvam import map_lang_reverse, identify_text_language
+
+            script_language = detect_script_language(text)
+            provider_language = None
+            if detected_language:
+                try:
+                    provider_language = map_lang_reverse(detected_language)
+                except ValueError:
+                    provider_language = (
+                        detected_language.lower().replace("_", "-").split("-", 1)[0]
+                        if isinstance(detected_language, str)
+                        else None
+                    )
+            candidate = (
+                script_language
+                if script_language in {"hi", "ta", "te", "kn", "ml"}
+                else (provider_language or script_language)
+            )
+            confidence = asr_result.get("language_confidence")
+            reason = None
+            if confidence is not None:
+                try:
+                    if not 0.6 <= float(confidence) <= 1.0:
+                        reason = "uncertain"
+                except (TypeError, ValueError):
+                    reason = "uncertain"
+            if candidate is None and reason is None:
+                candidate = await identify_text_language(text)
+            if candidate is None and reason is None:
+                reason = "uncertain"
+            if candidate and candidate not in self.conversation_languages:
+                reason = "outside_pair"
+
+            if reason:
+                await self.transition_state(StreamingState.ASR_FINAL)
+                await self._emit_ws({
+                    "type": "asr_final",
+                    "text": text,
+                    "is_final": True,
+                    "language": candidate,
+                    "language_confidence": confidence,
+                })
+                await self._emit_ws({
+                    "type": "language_detection_failed",
+                    "turn_id": conversation_turn_id,
+                    "text": text,
+                    "language": candidate,
+                    "reason": reason,
+                    "message": (
+                        "Language detection was uncertain. Choose the language for this turn."
+                        if reason == "uncertain"
+                        else "This turn was not in either selected conversation language. Choose its language to translate it."
+                    ),
+                })
+                return
+
+            self.source_lang = candidate
+            self.target_lang = (
+                self.conversation_languages[1]
+                if candidate == self.conversation_languages[0]
+                else self.conversation_languages[0]
+            )
         known_ids = {
             "en": "43a7cfdc-c0dc-4a19-9901-27f536165d45",
             "hi": "7e0d2af7-cab7-4190-ac2d-6a32f574db38",
@@ -149,7 +242,16 @@ class StreamingOrchestrator:
             "kn": "6dc5cdd2-a18d-443d-9a9f-cccb4c7da3ce",
             "ml": "3bc98387-7244-4d1b-a63e-b314190a2b53",
         }
-        if self.auto_detect and text.strip():
+        if self.conversation_mode:
+            for language in (self.source_lang, self.target_lang):
+                if language not in self.language_id_cache:
+                    try:
+                        self.language_id_cache[language] = get_language_id(self.db, language)
+                    except Exception:
+                        self.language_id_cache[language] = known_ids.get(language)
+            self.source_language_id = self.language_id_cache.get(self.source_lang)
+            self.target_language_id = self.language_id_cache.get(self.target_lang)
+        if self.auto_detect and not self.conversation_mode and text.strip():
             script_lang = detect_script_language(text)
             if script_lang:
                 self.source_lang = script_lang
@@ -185,7 +287,7 @@ class StreamingOrchestrator:
                 self.source_language_id = self.language_id_cache.get(self.source_lang)
                 if self.session_id and not self.session_source_language_set:
                     self.session_source_language_set = True
-        elif detected_language and self.auto_detect:
+        elif detected_language and self.auto_detect and not self.conversation_mode:
             try:
                 from app.services.providers.sarvam import map_lang_reverse
                 self.source_lang = map_lang_reverse(detected_language)
@@ -260,7 +362,7 @@ class StreamingOrchestrator:
                 await self.transition_state(StreamingState.TRANSLATION_UPDATED)
 
         trans_type = "translation_final" if is_final else "translation_partial"
-        await self._emit_ws({
+        translation_payload = {
             "type": trans_type,
             "utterance_id": self.utterance_id,
             "text": trans_res["translated_text"],
@@ -268,7 +370,10 @@ class StreamingOrchestrator:
             "is_final": is_final,
             "language": self.source_lang,
             "target_language": self.target_lang
-        })
+        }
+        if self.conversation_mode and is_final:
+            translation_payload["turn_id"] = conversation_turn_id
+        await self._emit_ws(translation_payload)
 
         metrics_data = None
         if is_final:

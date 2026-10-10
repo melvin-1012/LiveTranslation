@@ -35,6 +35,7 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 - Optional playback of translated text when speech synthesis is available.
 - Google OAuth sign-in and sign-up, email/password authentication, and password-reset email through Supabase Auth.
 - Target-language selection independent of Auto-detect.
+- Two-way Conversation Mode for a selected pair: each completed speech turn is detected, translated into the other language, and labeled by language; uncertain or out-of-pair turns can be corrected and translated.
 - Supabase authentication, saved language preferences, session history, and transcript/translation persistence where credentials, schema, and authorization permit.
 - Guest live sessions when session creation is unavailable; guest sessions are not associated with a signed-in account for history.
 - Mock paths for development and automated tests. Mock ASR does **not** transcribe microphone audio.
@@ -106,6 +107,10 @@ For translation, the standalone server uses Sarvam Translate v1 for supported In
 ### Typed and pasted text flow
 
 Text translation is independent of the microphone stream. Typing or pasting into the source textarea starts a short debounce; the **Translate** button and `Ctrl+Enter` request an immediate translation. The browser first posts to the standalone server's `POST /api/translate` endpoint. If that HTTP request is unavailable, it sends a `text_to_translate` message over a temporary `/ws/translate` connection. In Auto mode, the standalone backend detects supported Indic scripts from the text and treats otherwise undetected text as English. Translation then uses the configured provider route described above. Changing the target language while source text is present triggers a new translation.
+
+### Two-way Conversation Mode
+
+Choose **Two-way conversation**, select two different languages, and start the conversation. The microphone remains active while the realtime ASR provider marks completed turns; each detected turn is translated in the opposite direction, so either participant can speak next without restarting the stream. Turns are identified by language, not by speaker identity; this app does not perform voice diarization. If detection confidence is below 0.6, no translation is guessed: use that turn's language selector and **Correct & translate** to provide the intended language. Turns detected outside the selected pair also require correction. Live two-way language detection requires Sarvam Saaras v4 and `SARVAM_API_KEY`; one-way mode remains the default and keeps its existing routing.
 
 ## Technology stack and models
 
