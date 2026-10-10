@@ -1,6 +1,6 @@
 # Live Indic Translator
 
-Live Indic Translator is a browser application for real-time speech transcription and translation. It captures microphone audio, streams it to a Python WebSocket server, displays recognized speech and translated text, and can persist translation sessions and utterances to Supabase.
+Live Indic Translator is a browser application for real-time speech and text translation. It captures microphone audio or accepts text typed/pasted into the source panel, sends requests to a Python backend, displays recognized or translated text, and can persist signed-in translation sessions and utterances to Supabase.
 
 [**Open the hosted application**](https://liveindic-translator.onrender.com)
 
@@ -15,6 +15,7 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 - [System architecture](#system-architecture)
 - [Technology stack and models](#technology-stack-and-models)
 - [Requirements](#requirements)
+- [End-to-end implementation flow](backend/README.md)
 - [Install dependencies](#install-dependencies)
 - [Configure services](#configure-services)
 - [Run the application](#run-the-application)
@@ -27,9 +28,12 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 ## Features
 
 - Live microphone capture and PCM16 audio streaming.
+- Type or paste text for translation without starting microphone capture; translation is debounced while typing and can also be requested with the Translate button or `Ctrl+Enter`.
 - Automatic spoken-language detection for English, Hindi, Tamil, Telugu, Kannada, and Malayalam through Sarvam Saaras v4.
 - Manual source-language selection with the existing provider routing retained.
 - Real-time transcripts, detected-language badge, final translations, and optional synthesized speech.
+- Optional playback of translated text when speech synthesis is available.
+- Google OAuth sign-in and sign-up, email/password authentication, and password-reset email through Supabase Auth.
 - Target-language selection independent of Auto-detect.
 - Supabase authentication, saved language preferences, session history, and transcript/translation persistence where credentials, schema, and authorization permit.
 - Guest live sessions when session creation is unavailable; guest sessions are not associated with a signed-in account for history.
@@ -56,7 +60,8 @@ flowchart LR
     Browser["Browser UI<br/>index.html + app.ts"]
     Capture["Microphone capture<br/>Web Audio API / AudioWorklet"]
     Client["WebSocket client<br/>ws_translation.js"]
-    Server["FastAPI server<br/>server.py"]
+    Text["Typed or pasted text"]
+    Server["Standalone FastAPI server<br/>server.py"]
     ASR{"Source selection"}
     SarvamASR["Sarvam Saaras v4<br/>Auto: language_code=auto"]
     Deepgram["Deepgram Nova<br/>Manual supported languages"]
@@ -65,6 +70,7 @@ flowchart LR
     Supabase[("Supabase<br/>Auth, sessions, history")]
 
     Browser --> Capture --> Client
+    Browser --> Text -->|HTTP /api/translate<br/>WebSocket fallback| Server
     Client <-->|PCM16 audio and JSON events| Server
     Server --> ASR
     ASR -->|Auto-detect| SarvamASR
@@ -97,6 +103,10 @@ flowchart LR
 
 For translation, the standalone server uses Sarvam Translate v1 for supported Indic language pairs when configured, can use Google Cloud Translation API v2 when `GOOGLE_API_KEY` is configured, and otherwise returns a local placeholder translation. Sarvam Bulbul v3 speech generation is optional and requires Sarvam credentials.
 
+### Typed and pasted text flow
+
+Text translation is independent of the microphone stream. Typing or pasting into the source textarea starts a short debounce; the **Translate** button and `Ctrl+Enter` request an immediate translation. The browser first posts to the standalone server's `POST /api/translate` endpoint. If that HTTP request is unavailable, it sends a `text_to_translate` message over a temporary `/ws/translate` connection. In Auto mode, the standalone backend detects supported Indic scripts from the text and treats otherwise undetected text as English. Translation then uses the configured provider route described above. Changing the target language while source text is present triggers a new translation.
+
 ## Technology stack and models
 
 ### Frontend
@@ -105,6 +115,7 @@ For translation, the standalone server uses Sarvam Translate v1 for supported In
 - TypeScript 5, compiled to `dist/app.js`.
 - Vite 8 for local development.
 - Supabase JavaScript client (`@supabase/supabase-js`).
+- TypeScript is compiled with `tsc`; Vite serves the local frontend during development.
 - Browser APIs: `getUserMedia`, Web Audio API (`AudioWorklet` with compatibility fallback), and WebSocket.
 
 ### Backend
@@ -112,17 +123,23 @@ For translation, the standalone server uses Sarvam Translate v1 for supported In
 - Python 3.10 or newer.
 - FastAPI and Uvicorn.
 - `websockets` for provider and browser streaming connections.
-- `httpx` and `requests` for asynchronous and synchronous HTTP API calls.
+- `httpx` for asynchronous API calls and `requests` for synchronous REST calls.
 - Supabase Python client for session/history persistence.
 
-### Providers and models
+### Providers, libraries, and models
 
-- **Sarvam Saaras v4:** real-time ASR; adaptive `language_code=auto` is used for automatic detection.
-- **Sarvam Translate v1:** text translation.
-- **Sarvam Bulbul v3:** optional translated speech generation.
-- **Deepgram Nova 2 / Nova 3:** ASR for manually selected languages when configured. Auto-detect is deliberately routed away from Deepgram.
-- **Google Cloud Translation API v2:** optional translation provider/fallback when `GOOGLE_API_KEY` is configured.
-- **Mock ASR and translation:** development/test paths; mock ASR does not identify or transcribe actual speech.
+| Component | Technology/model | Use |
+| --- | --- | --- |
+| Frontend | TypeScript, HTML, CSS, Vite, Supabase JS | Browser UI, auth, preferences, history, and local development |
+| Audio capture | Web Audio API, AudioWorklet, PCM16 | Capture and stream microphone audio; ScriptProcessorNode is a compatibility fallback |
+| Backend | Python, FastAPI, Uvicorn, `websockets`, `httpx` | REST endpoints and asynchronous browser/provider WebSocket connections |
+| Speech recognition | Sarvam Saaras v4 | Real-time ASR and `language_code=auto` detection |
+| Speech recognition | Deepgram Nova 2 / Nova 3 | Manual source-language ASR when configured |
+| Translation | Sarvam Translate v1 | Translation for supported language pairs when configured |
+| Translation fallback | Google Cloud Translation API v2 | Optional translation fallback when `GOOGLE_API_KEY` is configured |
+| Speech synthesis | Sarvam Bulbul v3 | Optional spoken playback of translated text |
+| Persistence/auth | Supabase JS and Python clients, PostgreSQL, RLS | Accounts, preferences, sessions, utterances, translations, and metrics |
+| Development/testing | Mock providers, pytest, pytest-asyncio, Node.js checks | Local/test paths; mock ASR does not recognize microphone audio |
 
 ## Requirements
 
@@ -157,25 +174,29 @@ py -3 -m venv .venv
 python -m pip install --upgrade pip
 ```
 
-Install the repository and modular-backend dependencies:
+Install the standalone server dependencies from the repository root:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m pip install requests pydantic pydantic-settings
 ```
 
-The standalone `server.py` imports `requests`, which is not currently listed in the root requirements file. `pydantic-settings` is needed to load the optional REST routers mounted by the standalone server. The modular service's runtime dependencies are included in the root requirements file; the additional packages above cover its settings model as well.
+If you plan to run the separate modular FastAPI service, install its dependencies as well:
 
-For bash shells, the equivalent virtual-environment and install commands are:
+```powershell
+python -m pip install -r backend/requirements.txt
+```
+
+For bash shells, the equivalent install commands are:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt requests pydantic pydantic-settings
+python -m pip install -r requirements.txt
+python -m pip install -r backend/requirements.txt
 ```
 
-For the documented automated tests:
+For the automated tests:
 
 ```powershell
 python -m pip install pytest pytest-asyncio
@@ -272,9 +293,17 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 7. Click **Stop** to close the stream.
 8. If signed into Supabase and persistence is configured, open **History** to inspect saved sessions and utterances. Guest sessions provide live use without account history.
 
+To reproduce text translation without using a microphone:
+
+1. Leave the microphone stopped and enter or paste a short sentence in the **Recognized Speech** textarea.
+2. Select a source and target language, or keep **Auto-detect** as the source.
+3. Wait for the debounced request, click **Translate**, or press `Ctrl+Enter` (`Cmd+Enter` on macOS).
+4. Confirm the translated result appears in **Translated Text**. Click **Listen** to request speech playback when Sarvam TTS is configured and available.
+
 ### Expected behavior
 
 - In Auto mode, the backend log identifies Sarvam Saaras v4 with `language: auto`; it must not request Deepgram using `language=auto`.
+- Text requests use the separate HTTP/temporary-WebSocket path and do not require starting or stopping the microphone stream. The local mock translation returns a visibly marked placeholder, not a real translation.
 - A detected source language is used as the translation source and included in transcript response messages. Where the Supabase schema and access policies permit, it is associated with the utterance/session.
 - Manual selection continues to use the provider route appropriate to its language and available keys.
 - Mock ASR does not create real transcripts. A working microphone indicator or active WebSocket alone does not prove that a provider recognized speech.
@@ -305,7 +334,7 @@ For bash, use:
 PYTHONPATH=backend:. python -m pytest -q backend/tests/test_standalone_server_auto_detection.py backend/tests/test_sarvam_provider.py backend/tests/test_streaming.py
 ```
 
-The tests cover provider routing, the Auto-to-Sarvam request, manual-language routing, Sarvam transcript parsing, detected-language normalization, streaming behavior, and orchestrator handling. They use test doubles; passing them does not validate real API credentials or network connectivity. Integration tests may require a correctly configured Supabase project and should not be run against a database that can be damaged by test writes.
+The tests cover provider routing, the Auto-to-Sarvam request, manual-language routing, provider failures, Sarvam transcript parsing, detected-language normalization, text translation, frontend WebSocket URL configuration, streaming behavior, and orchestrator handling. They use test doubles; passing them does not validate real API credentials or network connectivity. Integration tests may require a correctly configured Supabase project and should not be run against a database that can be damaged by test writes.
 
 ## Troubleshooting
 
