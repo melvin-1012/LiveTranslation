@@ -20,6 +20,7 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 - [Configure services](#configure-services)
 - [Run the application](#run-the-application)
 - [Reproduce a live translation](#reproduce-a-live-translation)
+- [Reproduce a two-way conversation](#reproduce-a-two-way-conversation)
 - [Tests and validation](#tests-and-validation)
 - [Troubleshooting](#troubleshooting)
 - [Repository layout](#repository-layout)
@@ -146,6 +147,8 @@ Choose **Two-way conversation**, select two different languages, and start the c
 | Persistence/auth | Supabase JS and Python clients, PostgreSQL, RLS | Accounts, preferences, sessions, utterances, translations, and metrics |
 | Development/testing | Mock providers, pytest, pytest-asyncio, Node.js checks | Local/test paths; mock ASR does not recognize microphone audio |
 
+The root `requirements.txt` is used by `server.py`. `backend/requirements.txt` lists the modular service's Python dependencies. The frontend dependencies and exact versions are recorded in `package.json` and `package-lock.json`.
+
 ## Requirements
 
 - Windows, macOS, or Linux.
@@ -165,7 +168,7 @@ Run commands from the repository root.
 ### Frontend
 
 ```powershell
-npm install
+npm ci
 npm run build
 ```
 
@@ -305,10 +308,25 @@ To reproduce text translation without using a microphone:
 3. Wait for the debounced request, click **Translate**, or press `Ctrl+Enter` (`Cmd+Enter` on macOS).
 4. Confirm the translated result appears in **Translated Text**. Click **Listen** to request speech playback when Sarvam TTS is configured and available.
 
+## Reproduce a two-way conversation
+
+Two-way Conversation Mode requires a real Sarvam Saaras v4 connection, a valid `SARVAM_API_KEY`, and two distinct supported languages. It is not available with mock ASR.
+
+1. Start the standalone backend and frontend as described above.
+2. In the language controls, choose **Two-way conversation** and select the two languages participants will use; do not select Auto as either pair member.
+3. Click **Start Conversation** and allow microphone access.
+4. Speak a short sentence in either selected language, then pause so the ASR provider can finalize the turn.
+5. Confirm the conversation panel shows the detected direction and translated text. Speak in the other language without restarting the microphone; the translation direction should reverse.
+6. If a final turn has low language confidence or is outside the selected pair, choose its language on that turn and click **Correct & translate**.
+7. Click **Stop** when finished. If authenticated persistence is configured, inspect the completed session in **History**.
+
+Conversation Mode labels turns by detected language; it does not identify individual speakers. When detection confidence is below `0.6`, the app requests correction rather than guessing.
+
 ### Expected behavior
 
 - In Auto mode, the backend log identifies Sarvam Saaras v4 with `language: auto`; it must not request Deepgram using `language=auto`.
 - Text requests use the separate HTTP/temporary-WebSocket path and do not require starting or stopping the microphone stream. The local mock translation returns a visibly marked placeholder, not a real translation.
+- In Conversation Mode, final turns in the selected pair are translated toward the other selected language. Low-confidence or out-of-pair turns wait for user correction.
 - A detected source language is used as the translation source and included in transcript response messages. Where the Supabase schema and access policies permit, it is associated with the utterance/session.
 - Manual selection continues to use the provider route appropriate to its language and available keys.
 - Mock ASR does not create real transcripts. A working microphone indicator or active WebSocket alone does not prove that a provider recognized speech.
@@ -317,10 +335,11 @@ Recognition and translation quality vary with the microphone, audio level, backg
 
 ## Tests and validation
 
-Run frontend checks from the repository root:
+Run frontend build and client checks from the repository root:
 
 ```powershell
 npm run build
+node backend\tests\test_frontend_ws_url.js
 node --check ws_translation.js
 node --check audio_capture_processor.js
 git diff --check
@@ -330,16 +349,16 @@ Run the focused Python tests from the repository root:
 
 ```powershell
 $env:PYTHONPATH = (Join-Path (Get-Location).Path 'backend') + ';' + (Get-Location).Path
-python -m pytest -q backend\tests\test_standalone_server_auto_detection.py backend\tests\test_sarvam_provider.py backend\tests\test_streaming.py
+python -m pytest -q backend\tests --ignore=backend\tests\test_integration.py
 ```
 
 For bash, use:
 
 ```bash
-PYTHONPATH=backend:. python -m pytest -q backend/tests/test_standalone_server_auto_detection.py backend/tests/test_sarvam_provider.py backend/tests/test_streaming.py
+PYTHONPATH=backend:. python -m pytest -q backend/tests --ignore=backend/tests/test_integration.py
 ```
 
-The tests cover provider routing, the Auto-to-Sarvam request, manual-language routing, provider failures, Sarvam transcript parsing, detected-language normalization, text translation, frontend WebSocket URL configuration, streaming behavior, and orchestrator handling. They use test doubles; passing them does not validate real API credentials or network connectivity. Integration tests may require a correctly configured Supabase project and should not be run against a database that can be damaged by test writes.
+The suite covers provider routing and errors, Auto-detection, text translation, Conversation Mode direction/correction, streaming behavior, stabilization, persistence orchestration, and frontend WebSocket URL configuration. The integration test is excluded because it can write to Supabase and requires a configured test project; do not run it against data you need to keep. Tests use mocks and test doubles, so passing them does not validate real provider credentials, external network availability, recognition quality, or production Supabase permissions.
 
 ## Troubleshooting
 

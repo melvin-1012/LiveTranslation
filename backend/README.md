@@ -55,6 +55,16 @@ flowchart TD
 
 The two server boxes represent alternatives: the frontend connects to the backend URL it is configured to use; it does not send the same stream to both backends.
 
+## Protocol and control messages
+
+The browser-facing WebSocket path is `/ws/translate` on either backend, though the initial configuration and service implementation differ:
+
+- The standalone server receives live speech configuration and control messages through its `frontend_receiver` task and places audio/control work on an asyncio queue consumed by its provider loop. Its initial configuration includes the session, selected languages, optional conversation pair and language IDs, and auth token.
+- The modular endpoint first receives a JSON configuration message, validates required session/language/token fields, initializes the orchestrator and ASR service, then handles subsequent binary audio frames and text control messages.
+- Both clients use JSON for configuration/control and binary WebSocket frames for audio. Responses are JSON events such as `asr_partial`, `asr_final`, `translation_partial`, `translation_final`, `language_detection_failed`, `audio_ready`, `info`, and `error`. Not every event is emitted by both backend implementations.
+- `end_utterance` asks the modular orchestrator to finalize and drain queued persistence. The standalone service shuts down the active upstream stream when the client stops or changes source language.
+- The standalone backend also exposes `POST /api/translate` for text requests. The modular backend's WebSocket endpoint accepts a direct `text_to_translate` message as its initial request; it is not a replacement for the standalone HTTP route.
+
 ## Browser responsibilities
 
 - `index.html` defines the language selectors, source and target textareas, microphone controls, translation actions, sign-in UI, and history UI.
@@ -86,6 +96,18 @@ The standalone server cleans placeholder API-key values before routing:
 
 Sarvam transcript events can carry language and confidence metadata. The server normalizes detected language codes and uses the detected source language when translating. The detected language is sent back to the browser and can be associated with a persisted utterance when the schema and session permissions allow it.
 
+### Two-way Conversation Mode
+
+Conversation Mode is implemented in the standalone server and corresponding frontend. It uses one continuously active microphone stream for a configured pair of languages:
+
+1. The browser requires two different explicit source/target choices, then sends `conversation_mode: true` and their language codes in the initial WebSocket configuration. It initializes a turn list and keeps the microphone running.
+2. Auto-detect ASR is used for the stream. At each final transcript, `resolve_conversation_turn()` combines provider language/confidence with script detection. A supported Indic script takes precedence over a conflicting provider language guess.
+3. A confidence below `0.6`, missing/unsupported detection, or a detected language outside the selected pair produces `language_detection_failed` with a reason and turn ID. The server does not guess a translation for that turn.
+4. When the detected language belongs to the pair, the other pair member becomes the target. The backend sends the final transcript and translation with language direction and turn ID; the frontend updates the matching conversation card.
+5. For an uncertain/out-of-pair turn, the user selects its intended source language and clicks **Correct & translate**. The frontend sends the original text, corrected pair, turn ID, and a correction marker over the still-open socket; the server replies with the corresponding translation event.
+
+Turns are labeled by language only. The system does not diarize speakers, and it expects participants to take turns with enough pause for ASR finalization. Conversation Mode needs real Sarvam Saaras v4 auto-detection and is distinct from one-way manual-language streaming.
+
 ### Modular streaming pipeline (`backend/app`)
 
 The modular server mounts its WebSocket endpoint from `backend/app/api/endpoints/ws.py`. That endpoint builds the services through `get_provider_factory()`:
@@ -107,6 +129,8 @@ Text translation does not require microphone permission or an active speech stre
 6. The result is rendered in the target textarea. A Listen action requests optional Sarvam Bulbul speech synthesis when configured and available.
 
 Changing the selected language pair while text is present triggers a fresh text translation. Starting a microphone stream does not itself translate arbitrary edits in the text area; use the text action when a separate typed-text request is needed.
+
+The modular WebSocket endpoint additionally accepts `text_to_translate` as its initial JSON message or as a text message during a configured connection. Its initial text path uses the configured translation service and returns `translation_final`. The browser application's normal typed-text HTTP request and temporary-WebSocket fallback target the standalone server.
 
 ## Persistence and account flow
 
@@ -144,9 +168,17 @@ Frontend validation:
 npm run build
 node backend\tests\test_frontend_ws_url.js
 node --check ws_translation.js
+node --check audio_capture_processor.js
 ```
 
-These tests use mocks and test doubles. They validate code paths and request behavior, not real provider credentials, external network availability, recognition quality, or production Supabase permissions.
+Run the offline-safe backend tests with:
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location).Path 'backend') + ';' + (Get-Location).Path
+python -m pytest -q backend\tests --ignore=backend\tests\test_integration.py
+```
+
+These tests use mocks and test doubles. They validate code paths and request behavior, not real provider credentials, external network availability, recognition quality, or production Supabase permissions. The integration test may write to Supabase; only run it with a dedicated test project whose data can be discarded.
 
 ## Main implementation files
 
