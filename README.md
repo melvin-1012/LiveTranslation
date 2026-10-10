@@ -44,7 +44,7 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 
 Try the deployed application at [liveindic-translator.onrender.com](https://liveindic-translator.onrender.com). Allow microphone access when prompted. Live speech recognition and translation depend on the deployed backend, valid provider credentials, network connectivity, and provider availability.
 
-The frontend uses `http(s)://<backend-host>:8000` locally by default. For deployment, set `window.LIVE_TRANSLATION_BACKEND_URL` to the backend's public HTTP(S) or WS(S) origin in a script loaded before `ws_translation.js`; the app converts HTTP(S) to WS(S) and connects to `/ws/translate`. An HTTPS frontend requires an HTTPS/WSS backend. For example, place this before the existing `ws_translation.js` script tag in `index.html`:
+The frontend uses `http(s)://<current-host>:8000` locally by default. The hosted `liveindic-translator.onrender.com` frontend is configured to use `https://livetranslation-iok7.onrender.com`; the app converts this to WSS for the `/ws/translate` WebSocket and uses the same origin for HTTP API requests such as `/api/translate`. Local development continues to use the local backend. For any other deployment, set `window.LIVE_TRANSLATION_BACKEND_URL` to the backend's public HTTP(S) or WS(S) origin in a script loaded before `ws_translation.js`. An HTTPS frontend requires an HTTPS/WSS backend. For example, place this before the existing `ws_translation.js` script tag in `index.html`:
 
 ```html
 <script>

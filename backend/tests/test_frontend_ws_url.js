@@ -30,6 +30,28 @@ function createUrlResolver(locationObj, configuredBackendUrl) {
     return backendUrl.toString();
 }
 
+function getHttpBaseUrl(locationObj, configuredBackendUrl) {
+    const host = locationObj.hostname || '127.0.0.1';
+    const protocol = locationObj.protocol === 'https:' ? 'https:' : 'http:';
+    let backendUrl;
+    if (configuredBackendUrl) {
+        backendUrl = new URL(configuredBackendUrl);
+        if (backendUrl.protocol === 'wss:') backendUrl.protocol = 'https:';
+        else if (backendUrl.protocol === 'ws:') backendUrl.protocol = 'http:';
+    } else {
+        backendUrl = new URL(`${protocol}//${host}:8000`);
+    }
+    return `${backendUrl.protocol}//${backendUrl.host}`;
+}
+
+function getConfiguredBackend(locationObj, existingBackendUrl) {
+    if (existingBackendUrl) return existingBackendUrl;
+    if (locationObj.hostname === 'liveindic-translator.onrender.com') {
+        return 'https://livetranslation-iok7.onrender.com';
+    }
+    return undefined;
+}
+
 // 1. Default local dev
 assert.strictEqual(
     createUrlResolver({ protocol: 'http:', hostname: 'localhost' }),
@@ -48,13 +70,37 @@ assert.strictEqual(
     'ws://127.0.0.1:8000/ws/translate'
 );
 
-// 4. Hosted HTTPS with configured backend
+// 4. The hosted frontend uses the deployed backend by default.
+const productionLocation = {
+    protocol: 'https:',
+    hostname: 'liveindic-translator.onrender.com'
+};
+const productionBackend = getConfiguredBackend(productionLocation);
 assert.strictEqual(
-    createUrlResolver({ protocol: 'https:', hostname: 'app.example.com' }, 'https://api.example.com'),
+    createUrlResolver(productionLocation, productionBackend),
+    'wss://livetranslation-iok7.onrender.com/ws/translate'
+);
+assert.strictEqual(
+    getHttpBaseUrl(productionLocation, productionBackend),
+    'https://livetranslation-iok7.onrender.com'
+);
+
+// 5. An explicit backend configuration still takes precedence.
+assert.strictEqual(
+    createUrlResolver(
+        { protocol: 'https:', hostname: 'app.example.com' },
+        getConfiguredBackend({ protocol: 'https:', hostname: 'app.example.com' }, 'https://api.example.com')
+    ),
     'wss://api.example.com/ws/translate'
 );
 
-// 5. Insecure backend rejected on secure page
+// 6. Local development uses the local backend over HTTP.
+assert.strictEqual(
+    getHttpBaseUrl({ protocol: 'http:', hostname: 'localhost' }),
+    'http://localhost:8000'
+);
+
+// 7. Insecure backend rejected on secure page.
 assert.throws(() => {
     createUrlResolver({ protocol: 'https:', hostname: 'app.example.com' }, 'http://api.example.com');
 }, /Secure pages require a backend URL/);
