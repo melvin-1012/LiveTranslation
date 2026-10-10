@@ -1,5 +1,45 @@
 // ws_translation.js - Real-time Voice Recognition & Dravidian Translation with Supabase Integration
 (function() {
+    function getTranslationSocketUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const configuredBackendUrl = window.LIVE_TRANSLATION_BACKEND_URL;
+        const host = window.location.hostname || '127.0.0.1';
+        const backendUrl = configuredBackendUrl
+            ? new URL(configuredBackendUrl)
+            : new URL(`${protocol}//${host}:8000`);
+
+        if (backendUrl.protocol === 'https:') {
+            backendUrl.protocol = 'wss:';
+        } else if (backendUrl.protocol === 'http:') {
+            backendUrl.protocol = 'ws:';
+        } else if (backendUrl.protocol !== 'ws:' && backendUrl.protocol !== 'wss:') {
+            throw new Error('LIVE_TRANSLATION_BACKEND_URL must use http(s) or ws(s).');
+        }
+        if (window.location.protocol === 'https:' && backendUrl.protocol !== 'wss:') {
+            throw new Error('Secure pages require a backend URL using https:// or wss://.');
+        }
+
+        backendUrl.pathname = `${backendUrl.pathname.replace(/\/+$/, '')}/ws/translate`;
+        backendUrl.search = '';
+        backendUrl.hash = '';
+        return backendUrl.toString();
+    }
+
+    function getBackendHttpUrl() {
+        const configuredBackendUrl = window.LIVE_TRANSLATION_BACKEND_URL;
+        const host = window.location.hostname || '127.0.0.1';
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        let backendUrl;
+        if (configuredBackendUrl) {
+            backendUrl = new URL(configuredBackendUrl);
+            if (backendUrl.protocol === 'wss:') backendUrl.protocol = 'https:';
+            else if (backendUrl.protocol === 'ws:') backendUrl.protocol = 'http:';
+        } else {
+            backendUrl = new URL(`${protocol}//${host}:8000`);
+        }
+        return `${backendUrl.protocol}//${backendUrl.host}`;
+    }
+
     function initTranslator() {
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -9,11 +49,18 @@
         const sourceLanguageSelect = document.getElementById('sourceLanguage');
         const targetLanguageSelect = document.getElementById('targetLanguage');
         const sourceLangBadge = document.getElementById('sourceLangBadge');
+        const targetLangBadge = document.getElementById('targetLangBadge');
         const startBtnText = document.getElementById('startBtnText');
         const statusText = document.getElementById('statusText');
         const statusBadge = document.getElementById('statusBadge');
         const audioWaves = document.getElementById('audioWaves');
         const swapBtn = document.getElementById('swapLanguagesBtn');
+        const translateSourceBtn = document.getElementById('translateSourceBtn');
+        const speakTargetBtn = document.getElementById('speakTargetBtn');
+        const sourceCharCount = document.getElementById('sourceCharCount');
+        const targetCharCount = document.getElementById('targetCharCount');
+        const sourceHint = document.getElementById('sourceHint');
+        const targetHint = document.getElementById('targetHint');
         const app = window.LiveIndicTranslator;
 
         if (
@@ -81,9 +128,9 @@
             }
         }
 
-        function reportError(title, message) {
+        function reportError(title, message, alertType = 'connection-error') {
             if (app && app.showLiveAlert) {
-                app.showLiveAlert('connection-error', title, message);
+                app.showLiveAlert(alertType, title, message);
             } else {
                 console.error(title, message);
             }
@@ -100,10 +147,20 @@
             return typeof error === 'string' ? error : 'An unexpected error occurred.';
         }
 
+        function updateCounts() {
+            if (sourceCharCount && sourceTranscript) {
+                sourceCharCount.textContent = String(sourceTranscript.value.length);
+            }
+            if (targetCharCount && targetTranslation) {
+                targetCharCount.textContent = String(targetTranslation.value.length);
+            }
+        }
+
         function updateTextPanels() {
             sourceTranscript.value = (baseSource + currentSource).trimStart();
             sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
             targetTranslation.scrollTop = targetTranslation.scrollHeight;
+            updateCounts();
         }
 
         function releaseAudio() {
@@ -281,7 +338,7 @@
                     };
                 } catch (workletErr) {
                     console.warn('AudioWorklet unavailable, falling back to ScriptProcessor:', workletErr);
-                    processorNode = context.createScriptProcessor(4096, 1, 1);
+                    processorNode = context.createScriptProcessor(2048, 1, 1);
                     processorNode.onaudioprocess = (e) => {
                         if (!ws || ws.readyState !== WebSocket.OPEN || isStopping) return;
                         const inputChannel = e.inputBuffer.getChannelData(0);
@@ -328,8 +385,7 @@
                     activeSessionId = session.sessionId;
                 }
 
-                const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const newWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
+                const newWs = new WebSocket(getTranslationSocketUrl());
                 ws = newWs;
                 if (cancelPendingStart === cancelAttempt) cancelPendingStart = null;
 
@@ -361,18 +417,52 @@
                         return;
                     }
 
+                    if (data.type === 'info') {
+                        if (app && app.showLiveAlert) {
+                            app.showLiveAlert('info', data.title || 'Notice', data.message || '');
+                        }
+                        return;
+                    }
+
                     if (data.type === 'error') {
                         const message = data.message || 'The translation server reported an error.';
+                        const category = data.error_category;
                         const isAutoDetectionError =
                             sourceLanguage === 'Auto' &&
                             (message.includes('Auto-detection requires') ||
                                 message.includes('SARVAM_API_KEY'));
-                        reportError(
-                            isAutoDetectionError ? 'Auto-detection is not configured' : 'Translation service error',
-                            isAutoDetectionError
-                                ? `${message} Set TRANSLATION_PROVIDER=sarvam and configure SARVAM_API_KEY in backend/.env, then restart the backend.`
-                                : message
-                        );
+
+                        let title = data.title;
+                        let alertType = 'connection-error';
+
+                        if (!title) {
+                            if (isAutoDetectionError) {
+                                title = 'Auto-detection is not configured';
+                            } else if (category === 'authentication_error') {
+                                title = 'ASR Authentication Failed';
+                                alertType = 'connection-error';
+                            } else if (category === 'provider_limits') {
+                                title = 'Provider Limit Reached';
+                                alertType = 'translation-error';
+                            } else if (category === 'network_failure') {
+                                title = 'ASR Network Failure';
+                                alertType = 'connection-error';
+                            } else if (category === 'configuration_error') {
+                                title = 'Configuration Error';
+                                alertType = 'translation-error';
+                            } else {
+                                title = 'Translation service error';
+                                alertType = 'translation-error';
+                            }
+                        } else if (category === 'provider_limits' || category === 'configuration_error') {
+                            alertType = 'translation-error';
+                        }
+
+                        const displayMsg = isAutoDetectionError
+                            ? `${message} Configure SARVAM_API_KEY in .env, then restart the backend.`
+                            : message;
+
+                        reportError(title, displayMsg, alertType);
                         void stopListening();
                         return;
                     }
@@ -401,6 +491,7 @@
                         }
                         targetTranslation.value = baseTarget + (data.text || '') + '...';
                         targetTranslation.scrollTop = targetTranslation.scrollHeight;
+                        updateCounts();
                         return;
                     }
                     if (data.type === 'translation_final') {
@@ -417,11 +508,22 @@
                         targetTranslation.value = baseTarget.trim();
                         sourceTranscript.scrollTop = sourceTranscript.scrollHeight;
                         targetTranslation.scrollTop = targetTranslation.scrollHeight;
+                        updateCounts();
 
                         if (data.audio_base64) {
                             const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
                             audio.play().catch(e => console.warn('Audio playback prevented:', e));
                         }
+                    }
+
+                    if (data.type === 'audio_ready' && data.audio_base64) {
+                        try {
+                            const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                            audio.play().catch(e => console.warn('Audio playback prevented:', e));
+                        } catch (e) {
+                            console.warn('Audio init notice:', e);
+                        }
+                        return;
                     }
                 };
 
@@ -471,17 +573,36 @@
 
         if (clearBtn) {
             clearBtn.addEventListener('click', () => {
+                if (activeTextAbortController) {
+                    activeTextAbortController.abort();
+                    activeTextAbortController = null;
+                }
+                clearTimeout(typingTimer);
                 baseSource = '';
                 baseTarget = '';
                 currentSource = '';
                 sourceTranscript.value = '';
                 targetTranslation.value = '';
+                targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                updateCounts();
+                if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
+                    sourceLangBadge.textContent = 'Auto-detect';
+                }
+                if (targetHint) {
+                    targetHint.textContent = 'Awaiting input';
+                }
             });
         }
 
         // Coalesce paired selector/swap events so they cause only one session restart.
         function handleLanguageChange() {
-            if (!ws && !starting && !languageRestartInProgress) return;
+            if (!ws && !starting && !languageRestartInProgress) {
+                if (sourceTranscript.value.trim()) {
+                    clearTimeout(typingTimer);
+                    void performTextTranslation(true);
+                }
+                return;
+            }
             if (languageChangeTimer) clearTimeout(languageChangeTimer);
             languageChangeTimer = setTimeout(() => {
                 languageChangeTimer = null;
@@ -521,58 +642,199 @@
             });
         }
 
-        // Debounced Text-to-Text translation when not speaking
+        // Dedicated Text-to-Text translation system
         let typingTimer = null;
-        sourceTranscript.addEventListener('input', () => {
-            if (ws || starting || isStopping) return;
-            clearTimeout(typingTimer);
-            const text = sourceTranscript.value.trim();
+        let activeTextAbortController = null;
+        let activeTextRequestId = 0;
+        let lastPlayedAudio = null;
+
+        async function performTextTranslation(immediate = false, speak = false) {
+            const text = (sourceTranscript.value || '').trim();
+            updateCounts();
+
             if (!text) {
+                if (activeTextAbortController) {
+                    activeTextAbortController.abort();
+                    activeTextAbortController = null;
+                }
                 targetTranslation.value = '';
+                targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                updateCounts();
                 if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
                     sourceLangBadge.textContent = 'Auto-detect';
                 }
+                if (targetHint) {
+                    targetHint.textContent = 'Awaiting input';
+                }
+                return;
+            }
+
+            if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
+                sourceLangBadge.textContent = 'Detecting...';
+            }
+            if (targetHint) {
+                targetHint.textContent = 'Translating...';
+            }
+
+            const currentId = ++activeTextRequestId;
+            if (activeTextAbortController) {
+                activeTextAbortController.abort();
+            }
+            activeTextAbortController = new AbortController();
+
+            const srcCode = languageCodes[sourceLanguageSelect.value] || 'auto';
+            const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
+
+            // 1. Try Fast HTTP REST API
+            try {
+                const httpUrl = `${getBackendHttpUrl()}/api/translate`;
+                const response = await fetch(httpUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: text,
+                        source_language: srcCode,
+                        target_language: tgtCode,
+                        include_speech: Boolean(speak)
+                    }),
+                    signal: activeTextAbortController.signal
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (currentId !== activeTextRequestId) return;
+
+                    if (data.status === 'success' && data.translated_text !== undefined) {
+                        targetTranslation.value = data.translated_text;
+                        targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                        updateCounts();
+                        if (targetHint) {
+                            targetHint.textContent = 'Translation complete';
+                        }
+                        const detected = data.detected_language || data.language;
+                        if (detected && languageNames[detected] && sourceLangBadge) {
+                            detectedSourceLanguage = languageNames[detected];
+                            sourceLangBadge.textContent = detectedSourceLanguage;
+                        }
+                        if (data.audio_base64 && speak) {
+                            try {
+                                if (lastPlayedAudio) lastPlayedAudio.pause();
+                                lastPlayedAudio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                                lastPlayedAudio.play().catch(e => console.warn('Audio notice:', e));
+                            } catch (e) {}
+                        }
+                        return;
+                    }
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                console.warn('[Text Translate] HTTP API failed, trying WS fallback:', err);
+            }
+
+            // 2. WebSocket Fallback if HTTP fails
+            try {
+                if (currentId !== activeTextRequestId) return;
+                const tempWs = new WebSocket(getTranslationSocketUrl());
+                let timeoutId = setTimeout(() => {
+                    try { tempWs.close(); } catch (e) {}
+                }, 8000);
+
+                tempWs.onopen = () => {
+                    tempWs.send(JSON.stringify({
+                        source_language: srcCode,
+                        target_language: tgtCode,
+                        text_to_translate: text,
+                        include_speech: Boolean(speak)
+                    }));
+                };
+
+                tempWs.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'translation_final' || data.translated_text || data.text) {
+                            if (currentId === activeTextRequestId) {
+                                targetTranslation.value = data.translated_text || data.text || '';
+                                targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
+                                updateCounts();
+                                if (targetHint) {
+                                    targetHint.textContent = 'Translation complete';
+                                }
+                                const detected = data.detected_language || data.language;
+                                if (detected && languageNames[detected] && sourceLangBadge) {
+                                    detectedSourceLanguage = languageNames[detected];
+                                    sourceLangBadge.textContent = detectedSourceLanguage;
+                                }
+                                if (data.audio_base64 && speak) {
+                                    try {
+                                        if (lastPlayedAudio) lastPlayedAudio.pause();
+                                        lastPlayedAudio = new Audio("data:audio/wav;base64," + data.audio_base64);
+                                        lastPlayedAudio.play().catch(e => console.warn('Audio notice:', e));
+                                    } catch (e) {}
+                                }
+                            }
+                            clearTimeout(timeoutId);
+                            tempWs.close();
+                        }
+                    } catch (e) {
+                        console.error('Error parsing WS translation:', e);
+                    }
+                };
+
+                tempWs.onerror = () => {
+                    clearTimeout(timeoutId);
+                    try { tempWs.close(); } catch (e) {}
+                    if (targetHint && currentId === activeTextRequestId) {
+                        targetHint.textContent = 'Translation failed';
+                    }
+                };
+            } catch (wsErr) {
+                console.error('[Text Translate] WS fallback failed:', wsErr);
+            }
+        }
+
+        sourceTranscript.addEventListener('input', () => {
+            if (ws || starting || isStopping) return;
+            clearTimeout(typingTimer);
+            updateCounts();
+            const text = sourceTranscript.value.trim();
+            if (!text) {
+                void performTextTranslation(true);
                 return;
             }
             if (sourceLanguageSelect.value === 'Auto' && sourceLangBadge) {
                 sourceLangBadge.textContent = 'Detecting...';
             }
+            if (targetHint) {
+                targetHint.textContent = 'Typing...';
+            }
             typingTimer = setTimeout(() => {
-                const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const tempWs = new WebSocket(`${socketProtocol}//${window.location.hostname}:8000/ws/translate`);
-                tempWs.onopen = () => {
-                    const srcCode = languageCodes[sourceLanguageSelect.value] || 'auto';
-                    const tgtCode = languageCodes[targetLanguageSelect.value] || 'hi';
-                    tempWs.send(JSON.stringify({
-                        source_language: srcCode,
-                        target_language: tgtCode,
-                        text_to_translate: text
-                    }));
-                };
-                tempWs.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        if (data.translated_text || data.text) {
-                            targetTranslation.value = data.translated_text || data.text;
-                        }
-                        if (data.language && languageNames[data.language]) {
-                            detectedSourceLanguage = languageNames[data.language];
-                            if (sourceLangBadge) {
-                                sourceLangBadge.textContent = detectedSourceLanguage;
-                            }
-                        }
-                        if (data.audio_base64) {
-                            const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
-                            audio.play().catch(e => console.warn('Audio playback prevented:', e));
-                        }
-                    } catch {}
-                    tempWs.close();
-                };
-                tempWs.onerror = () => {
-                    try { tempWs.close(); } catch (e) {}
-                };
-            }, 500);
+                void performTextTranslation();
+            }, 350);
         });
+
+        sourceTranscript.addEventListener('keydown', (e) => {
+            if (ws || starting || isStopping) return;
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                clearTimeout(typingTimer);
+                void performTextTranslation(true);
+            }
+        });
+
+        if (translateSourceBtn) {
+            translateSourceBtn.addEventListener('click', () => {
+                clearTimeout(typingTimer);
+                void performTextTranslation(true);
+            });
+        }
+
+        if (speakTargetBtn) {
+            speakTargetBtn.addEventListener('click', () => {
+                const text = (targetTranslation.value || '').trim();
+                if (!text) return;
+                void performTextTranslation(true, true);
+            });
+        }
     }
 
     if (document.readyState === 'loading') {

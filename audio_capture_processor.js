@@ -1,7 +1,7 @@
 class AudioCaptureProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
-        this.frameSize = 4096;
+        this.frameSize = 2048; // 128ms low-latency audio packetization at 16kHz
         this.frame = new Int16Array(this.frameSize);
         this.frameOffset = 0;
     }

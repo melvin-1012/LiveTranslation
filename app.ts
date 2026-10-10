@@ -192,6 +192,8 @@ export interface WindowLiveIndicTranslator {
   openAuthModal: (mode?: 'login' | 'signup') => void;
   closeAuthModal: () => void;
   switchAuthMode: (mode: 'login' | 'signup') => void;
+  handleGoogleOAuth?: (fromSignup?: boolean) => Promise<void>;
+  supabase?: any;
 }
 
 // Global augmentation
@@ -386,7 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginPasswordError = document.getElementById('loginPasswordError') as HTMLElement;
   const loginRememberMe = document.getElementById('loginRememberMe') as HTMLInputElement;
   const forgotPasswordLink = document.getElementById('forgotPasswordLink') as HTMLButtonElement;
-  const googleSignInBtn = document.getElementById('googleSignInBtn') as HTMLButtonElement;
+  const googleSignInBtn = document.getElementById('googleSignInBtn') as HTMLButtonElement | null;
   const switchToSignupBtn = document.getElementById('switchToSignupBtn') as HTMLButtonElement;
 
   // Signup Form Elements
@@ -406,6 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const signupTargetLang = document.getElementById('signupTargetLang') as HTMLSelectElement;
   const signupTargetLangError = document.getElementById('signupTargetLangError') as HTMLElement;
   const signupLangPairError = document.getElementById('signupLangPairError') as HTMLElement;
+  const googleSignUpBtn = document.getElementById('googleSignUpBtn') as HTMLButtonElement | null;
   const switchToLoginBtn = document.getElementById('switchToLoginBtn') as HTMLButtonElement;
 
   let recognition: ISpeechRecognition | null = null;
@@ -1420,12 +1423,15 @@ document.addEventListener('DOMContentLoaded', () => {
     setFieldError(null, signupLangPairError);
   }
 
-  function updateAccountUI(user: User | null): void {
+  function updateAccountUI(user: User | null, profileDisplayName?: string): void {
     const signedIn = Boolean(user);
-    const displayName = user?.user_metadata?.full_name as string | undefined;
+    const metadata = user?.user_metadata || {};
+    const metaFullName = typeof metadata.full_name === 'string' ? metadata.full_name.trim() : '';
+    const metaName = typeof metadata.name === 'string' ? metadata.name.trim() : '';
+    const displayName = profileDisplayName || metaFullName || metaName || user?.email || 'Signed in';
     if (accountSignInText) {
       accountSignInText.textContent = user
-        ? `${displayName || user.email || 'Signed in'} · Sign out`
+        ? `${displayName} · Sign out`
         : 'Sign in to view your history';
     }
     if (openAuthBtn) {
@@ -1448,26 +1454,64 @@ document.addEventListener('DOMContentLoaded', () => {
       .maybeSingle();
     if (profileError) throw profileError;
 
+    // Check for any pending preferences saved before OAuth redirect
+    let pendingPrefs: { sourceLang?: string; targetLang?: string; fullName?: string } | null = null;
+    try {
+      const stored = sessionStorage.getItem('pending_oauth_prefs');
+      if (stored) {
+        pendingPrefs = JSON.parse(stored);
+        sessionStorage.removeItem('pending_oauth_prefs');
+      }
+    } catch {
+      // ignore JSON parse or storage errors
+    }
+
     const metadata = user.user_metadata || {};
+    const metaFullName = typeof metadata.full_name === 'string' ? metadata.full_name.trim() : '';
+    const metaName = typeof metadata.name === 'string' ? metadata.name.trim() : '';
+    const resolvedDisplayName = pendingPrefs?.fullName || metaFullName || metaName || '';
+
     const profileUpdate: {
       id: string;
       display_name?: string;
-      preferred_source_language_id?: string;
+      email?: string;
+      preferred_source_language_id?: string | null;
       preferred_target_language_id?: string;
     } = { id: user.id };
-    if (typeof metadata.full_name === 'string' && metadata.full_name.trim()) {
-      profileUpdate.display_name = metadata.full_name.trim();
+
+    if (user.email) {
+      profileUpdate.email = user.email;
     }
 
-    const sourceCode = metadata.preferred_source_language as string | undefined;
-    const targetCode = metadata.preferred_target_language as string | undefined;
-    const sourceLanguage = (Object.keys(languageDatabaseCodes) as IndicLanguage[])
-      .find((language) => languageDatabaseCodes[language] === sourceCode);
-    const targetLanguage = (Object.keys(languageDatabaseCodes) as IndicLanguage[])
-      .find((language) => languageDatabaseCodes[language] === targetCode);
-    if (sourceLanguage && targetLanguage) {
-      const languageIds = await resolveLanguageIds(sourceLanguage, targetLanguage);
-      if (!existingProfile?.preferred_source_language_id) {
+    if (resolvedDisplayName && !existingProfile?.display_name) {
+      profileUpdate.display_name = resolvedDisplayName;
+    }
+
+    // Determine preferred source and target languages
+    let preferredSource = pendingPrefs?.sourceLang;
+    let preferredTarget = pendingPrefs?.targetLang;
+
+    if (!preferredSource && typeof metadata.preferred_source_language === 'string') {
+      const sourceLang = (Object.keys(languageDatabaseCodes) as IndicLanguage[])
+        .find((l) => languageDatabaseCodes[l] === metadata.preferred_source_language);
+      if (sourceLang) preferredSource = sourceLang;
+    }
+
+    if (!preferredTarget && typeof metadata.preferred_target_language === 'string') {
+      const targetLang = (Object.keys(languageDatabaseCodes) as IndicLanguage[])
+        .find((l) => languageDatabaseCodes[l] === metadata.preferred_target_language);
+      if (targetLang) preferredTarget = targetLang;
+    }
+
+    if (preferredSource && preferredTarget && preferredSource !== preferredTarget) {
+      const languageIds = preferredSource === 'Auto'
+        ? {
+            sourceLanguageId: null,
+            targetLanguageId: await resolveLanguageId(preferredTarget)
+          }
+        : await resolveLanguageIds(preferredSource, preferredTarget);
+
+      if (!existingProfile?.preferred_source_language_id && languageIds.sourceLanguageId) {
         profileUpdate.preferred_source_language_id = languageIds.sourceLanguageId;
       }
       if (!existingProfile?.preferred_target_language_id) {
@@ -1475,6 +1519,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Always ensure the profile record exists in public.profiles table (upsert with onConflict: 'id')
     if (Object.keys(profileUpdate).length > 1 || !existingProfile) {
       const { error } = await supabase
         .from('profiles')
@@ -1484,10 +1529,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const { data: profile, error: refreshedProfileError } = await supabase
       .from('profiles')
-      .select('preferred_source_language_id, preferred_target_language_id')
+      .select('display_name, preferred_source_language_id, preferred_target_language_id')
       .eq('id', user.id)
       .maybeSingle();
     if (refreshedProfileError) throw refreshedProfileError;
+
+    if (profile?.display_name) {
+      updateAccountUI(user, profile.display_name);
+    }
 
     const languageIds = [
       profile?.preferred_source_language_id,
@@ -1508,16 +1557,19 @@ document.addEventListener('DOMContentLoaded', () => {
           .find((name) => languageDatabaseCodes[name] === language.code)
       ])
     );
-    const preferredSource = profile?.preferred_source_language_id
+    const dbPreferredSource = profile?.preferred_source_language_id
       ? languageNameById.get(profile.preferred_source_language_id)
       : undefined;
-    const preferredTarget = profile?.preferred_target_language_id
+    const dbPreferredTarget = profile?.preferred_target_language_id
       ? languageNameById.get(profile.preferred_target_language_id)
       : undefined;
+
     if (sourceLanguageSelect) {
-      sourceLanguageSelect.value = preferredSource || 'Auto';
+      sourceLanguageSelect.value = dbPreferredSource || 'Auto';
     }
-    if (preferredTarget && targetLanguageSelect) targetLanguageSelect.value = preferredTarget;
+    if (dbPreferredTarget && targetLanguageSelect) {
+      targetLanguageSelect.value = dbPreferredTarget;
+    }
     updateLanguageBadges();
   }
 
@@ -1657,16 +1709,92 @@ document.addEventListener('DOMContentLoaded', () => {
   setupPasswordToggle(signupPasswordToggle, signupPassword, 'signupPassword');
   setupPasswordToggle(signupConfirmPasswordToggle, signupConfirmPassword, 'signupConfirmPassword');
 
-  // Forgot password & Google button handlers (Explicit frontend-only notice)
+  // Google OAuth handler connecting both Sign In and Register buttons
+  async function handleGoogleOAuth(fromSignup: boolean = false): Promise<void> {
+    clearAuthStatus();
+    showAuthStatus('Connecting to Google...', 'info');
+
+    if (googleSignInBtn) googleSignInBtn.disabled = true;
+    if (googleSignUpBtn) googleSignUpBtn.disabled = true;
+
+    try {
+      // If initiated from signup form with selected preferences, preserve them in sessionStorage
+      if (fromSignup) {
+        const sourceVal = signupSourceLang?.value;
+        const targetVal = signupTargetLang?.value;
+        const nameVal = signupName?.value.trim();
+        const pending: { sourceLang?: string; targetLang?: string; fullName?: string } = {};
+        if (sourceVal) pending.sourceLang = sourceVal;
+        if (targetVal) pending.targetLang = targetVal;
+        if (nameVal) pending.fullName = nameVal;
+        if (Object.keys(pending).length > 0) {
+          try {
+            sessionStorage.setItem('pending_oauth_prefs', JSON.stringify(pending));
+          } catch {
+            // ignore sessionStorage error
+          }
+        }
+      }
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+
+      if (data?.url) {
+        window.location.assign(data.url);
+      }
+    } catch (error) {
+      if (googleSignInBtn) googleSignInBtn.disabled = false;
+      if (googleSignUpBtn) googleSignUpBtn.disabled = false;
+      const message = describeError(error);
+      showAuthStatus(message, 'error');
+      showLiveAlert('info', 'Google Authentication Failed', message);
+    }
+  }
+
+  // Forgot password handler
   if (forgotPasswordLink) {
-    forgotPasswordLink.addEventListener('click', () => {
-      showAuthStatus('Password recovery is not connected yet. This is a frontend demo.', 'warning');
+    forgotPasswordLink.addEventListener('click', async () => {
+      clearAuthStatus();
+      const email = loginEmail?.value.trim() || '';
+      if (!email) {
+        setFieldError(loginEmail, loginEmailError, 'Enter your email address first to reset password.');
+        showAuthStatus('Please enter your email address above to receive a password reset link.', 'warning');
+        loginEmail?.focus();
+        return;
+      }
+      if (!isValidEmail(email)) {
+        setFieldError(loginEmail, loginEmailError, 'Please enter a valid email address.');
+        showAuthStatus('Please enter a valid email address.', 'error');
+        loginEmail?.focus();
+        return;
+      }
+      try {
+        showAuthStatus('Sending password reset instructions...', 'info');
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin
+        });
+        if (error) throw error;
+        showAuthStatus('Password reset link sent! Please check your email inbox.', 'info');
+      } catch (error) {
+        showAuthStatus(describeError(error), 'error');
+      }
     });
   }
 
   if (googleSignInBtn) {
     googleSignInBtn.addEventListener('click', () => {
-      showAuthStatus('Google OAuth is not connected yet. This is a frontend demo button.', 'info');
+      void handleGoogleOAuth(false);
+    });
+  }
+
+  if (googleSignUpBtn) {
+    googleSignUpBtn.addEventListener('click', () => {
+      void handleGoogleOAuth(true);
     });
   }
 
@@ -1943,10 +2071,49 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus,
     openAuthModal,
     closeAuthModal,
-    switchAuthMode
+    switchAuthMode,
+    handleGoogleOAuth,
+    supabase
   };
 
-  // Initial Sync
+  // -------------------------------------------------------------------------
+  // Handle OAuth Redirect URLs & Errors
+  // -------------------------------------------------------------------------
+  function handleOAuthRedirect(): void {
+    const searchParams = new URLSearchParams(window.location.search);
+    let hashStr = window.location.hash;
+    if (hashStr.startsWith('#')) {
+      hashStr = hashStr.substring(1);
+    }
+    const hashParams = new URLSearchParams(hashStr);
+
+    const error = searchParams.get('error') || hashParams.get('error');
+    const errorDescription = searchParams.get('error_description') || hashParams.get('error_description');
+    const errorCode = searchParams.get('error_code') || hashParams.get('error_code');
+
+    if (error || errorDescription || errorCode) {
+      const rawMessage = errorDescription || error || 'Google authentication was not completed.';
+      const cleanMessage = decodeURIComponent(rawMessage.replace(/\+/g, ' '));
+      showLiveAlert('info', 'Google Authentication Notice', cleanMessage);
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+      return;
+    }
+
+    if (searchParams.has('code') || hashParams.has('access_token')) {
+      window.setTimeout(() => {
+        const currentSearch = new URLSearchParams(window.location.search);
+        let currentHash = window.location.hash.startsWith('#') ? window.location.hash.substring(1) : window.location.hash;
+        const currentHashParams = new URLSearchParams(currentHash);
+        if (currentSearch.has('code') || currentHashParams.has('access_token')) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }, 500);
+    }
+  }
+
+  // Initial Sync & OAuth Check
+  handleOAuthRedirect();
   updateLanguageBadges();
   updateCharCounts();
   updateHistoryCountBadge();
@@ -1966,6 +2133,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (currentUser) {
       closeAuthModal();
+      if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
       const changedUser = currentUser;
       window.setTimeout(() => {
         if (currentUser?.id !== changedUser.id) return;
@@ -2017,6 +2187,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!currentUser) return;
 
     closeAuthModal();
+    if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
     try {
       await hydrateUserProfile(currentUser);
     } catch (error) {
