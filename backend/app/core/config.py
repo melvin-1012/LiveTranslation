@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # Provider Configs
     TRANSLATION_PROVIDER: str = os.getenv("TRANSLATION_PROVIDER", "mock")
     SARVAM_API_KEY: str = os.getenv("SARVAM_API_KEY", "")
+    DEEPGRAM_API_KEY: str = os.getenv("DEEPGRAM_API_KEY", "")
     ASR_API_KEY: str = os.getenv("ASR_API_KEY", "")
     TRANSLATION_API_KEY: str = os.getenv("TRANSLATION_API_KEY", "")
     TTS_API_KEY: str = os.getenv("TTS_API_KEY", "")

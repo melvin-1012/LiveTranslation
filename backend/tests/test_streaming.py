@@ -35,6 +35,24 @@ def test_auto_detection_fails_clearly_when_mock_provider_is_active(monkeypatch):
     }
 
 
+def test_text_to_text_translation_works_without_stopping_streaming(monkeypatch):
+    monkeypatch.setattr(settings, "TRANSLATION_PROVIDER", "mock")
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/translate") as websocket:
+        websocket.send_json({
+            "text_to_translate": "Hello",
+            "source_language": "en",
+            "target_language": "hi",
+        })
+        response = websocket.receive_json()
+
+    assert response["type"] == "translation_final"
+    assert response["status"] == "success"
+    assert response["translated_text"] == "mock translated final for Hello"
+    assert response["is_final"] is True
+
+
 @pytest.mark.asyncio
 async def test_state_transitions():
     assert is_valid_transition(None, StreamingState.UTTERANCE_STARTED)

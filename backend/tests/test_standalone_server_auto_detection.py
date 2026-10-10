@@ -78,3 +78,49 @@ def test_parses_sarvam_transcript_events(event: str, is_final: bool) -> None:
         "language": "ta-IN",
         "language_confidence": 0.98,
     }
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("क्या हाल है?", "hi"),
+        ("வணக்கம்", "ta"),
+        ("నమస్కారం", "te"),
+        ("ನಮಸ್ಕಾರ", "kn"),
+        ("നമസ്കാരം", "ml"),
+        ("Hello, how are you?", "en"),
+        ("", None),
+    ],
+)
+def test_detect_script_language(text: str, expected: str | None) -> None:
+    assert server.detect_script_language(text) == expected
+
+
+@pytest.mark.asyncio
+async def test_route_translation_same_language() -> None:
+    res, provider = await server.route_translation("क्या हाल है?", "hi", "hi")
+    assert res == "क्या हाल है?"
+    assert provider == "same-language"
+
+    res_en, provider_en = await server.route_translation("Hello", "en", "en")
+    assert res_en == "Hello"
+    assert provider_en == "same-language"
+
+
+@pytest.mark.asyncio
+async def test_route_translation_corrects_script_when_mistakenly_passed_as_en(monkeypatch) -> None:
+    calls = []
+
+    async def mock_translate_sarvam(text, src, tgt):
+        calls.append((src, tgt))
+        return "How are you?"
+
+    monkeypatch.setattr(server, "SARVAM_API_KEY", "test-key")
+    monkeypatch.setattr(server, "translate_text_sarvam", mock_translate_sarvam)
+
+    res, provider = await server.route_translation("क्या हाल है?", "en", "en")
+    # Even though source was passed as "en", Devanagari script is detected as "hi",
+    # so it routes hi -> en rather than failing or returning same-language
+    assert calls == [("hi", "en")]
+    assert res == "How are you?"
+    assert provider == "sarvam-translate:v1"
