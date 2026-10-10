@@ -773,6 +773,17 @@ import audioCaptureProcessorUrl from './audio_capture_processor.js?url&no-inline
                 baseSource = '';
                 baseTarget = '';
                 currentSource = '';
+                if (conversationTurns) conversationTurns.replaceChildren();
+                conversationTurnCards.clear();
+                if (conversationPreview) {
+                    conversationPreview.textContent = '';
+                    conversationPreview.classList.add('hidden');
+                }
+                if (conversationTurnStatus) {
+                    conversationTurnStatus.textContent = ws
+                        ? 'Listening for either language'
+                        : 'Waiting for speech';
+                }
                 sourceTranscript.value = '';
                 targetTranslation.value = '';
                 targetTranslation.dispatchEvent(new Event('input', { bubbles: true }));
