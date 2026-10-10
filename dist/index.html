@@ -15,7 +15,7 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/assets/index-BXD1c10d.js"></script>
+  <script type="module" crossorigin src="/assets/index-Co1y09_p.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-DMphIiQA.css">
 </head>
 <body>
@@ -752,11 +752,13 @@
 <script>
   if (
     !window.LIVE_TRANSLATION_BACKEND_URL &&
-    window.location.hostname === 'liveindic-translator.onrender.com'
+    [
+      'liveindic-translator-frontend.onrender.com',
+      'liveindic-translator.onrender.com'
+    ].includes(window.location.hostname)
   ) {
     window.LIVE_TRANSLATION_BACKEND_URL = 'https://livetranslation-iok7.onrender.com';
   }
-</script>
-<script src="ws_translation.js"></script>
+</script>
 </body>
 </html>

@@ -1,4 +1,6 @@
 // ws_translation.js - Real-time Voice Recognition & Dravidian Translation with Supabase Integration
+import audioCaptureProcessorUrl from './audio_capture_processor.js?url&no-inline';
+
 (function() {
     function getTranslationSocketUrl() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -465,7 +467,7 @@
 
                 let processorNode;
                 try {
-                    await context.audioWorklet.addModule('/audio_capture_processor.js');
+                    await context.audioWorklet.addModule(audioCaptureProcessorUrl);
                     if (attemptId !== startAttemptId) return;
 
                     processorNode = new AudioWorkletNode(context, 'audio-capture-processor', {

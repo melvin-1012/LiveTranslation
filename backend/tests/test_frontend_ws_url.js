@@ -1,5 +1,7 @@
 // test_frontend_ws_url.js - Node test for getTranslationSocketUrl
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
 function createUrlResolver(locationObj, configuredBackendUrl) {
     global.window = {
@@ -46,7 +48,10 @@ function getHttpBaseUrl(locationObj, configuredBackendUrl) {
 
 function getConfiguredBackend(locationObj, existingBackendUrl) {
     if (existingBackendUrl) return existingBackendUrl;
-    if (locationObj.hostname === 'liveindic-translator.onrender.com') {
+    if ([
+        'liveindic-translator-frontend.onrender.com',
+        'liveindic-translator.onrender.com'
+    ].includes(locationObj.hostname)) {
         return 'https://livetranslation-iok7.onrender.com';
     }
     return undefined;
@@ -73,7 +78,7 @@ assert.strictEqual(
 // 4. The hosted frontend uses the deployed backend by default.
 const productionLocation = {
     protocol: 'https:',
-    hostname: 'liveindic-translator.onrender.com'
+    hostname: 'liveindic-translator-frontend.onrender.com'
 };
 const productionBackend = getConfiguredBackend(productionLocation);
 assert.strictEqual(
@@ -83,6 +88,13 @@ assert.strictEqual(
 assert.strictEqual(
     getHttpBaseUrl(productionLocation, productionBackend),
     'https://livetranslation-iok7.onrender.com'
+);
+assert.strictEqual(
+    createUrlResolver(
+        { protocol: 'https:', hostname: 'liveindic-translator.onrender.com' },
+        getConfiguredBackend({ protocol: 'https:', hostname: 'liveindic-translator.onrender.com' })
+    ),
+    'wss://livetranslation-iok7.onrender.com/ws/translate'
 );
 
 // 5. An explicit backend configuration still takes precedence.
@@ -104,5 +116,42 @@ assert.strictEqual(
 assert.throws(() => {
     createUrlResolver({ protocol: 'https:', hostname: 'app.example.com' }, 'http://api.example.com');
 }, /Secure pages require a backend URL/);
+
+const projectRoot = path.resolve(__dirname, '..', '..');
+const sourceHtml = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
+assert.match(sourceHtml, /<script\s+type="module"\s+src="\/ws_translation\.js"><\/script>/);
+assert.match(sourceHtml, /liveindic-translator-frontend\.onrender\.com/);
+assert.match(sourceHtml, /https:\/\/livetranslation-iok7\.onrender\.com/);
+
+const distDir = path.join(projectRoot, 'dist');
+const builtHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
+assert.doesNotMatch(builtHtml, /src="\/ws_translation\.js"/);
+assert.match(builtHtml, /liveindic-translator-frontend\.onrender\.com/);
+assert.match(builtHtml, /https:\/\/livetranslation-iok7\.onrender\.com/);
+const bundledScripts = [...builtHtml.matchAll(/<script[^>]+src="([^"]+\.js)"[^>]*><\/script>/g)];
+assert.ok(bundledScripts.length > 0, 'Vite build should emit frontend JavaScript bundles');
+const builtScriptContents = bundledScripts.map(([, src]) => {
+    const assetPath = path.join(distDir, src.replace(/^\//, ''));
+    assert.ok(fs.existsSync(assetPath), `Built script is missing: ${src}`);
+    return fs.readFileSync(assetPath, 'utf8');
+});
+assert.ok(
+    builtScriptContents.some((contents) => contents.includes('Start Conversation')),
+    'The built frontend bundle should include ws_translation.js'
+);
+const frontendBundle = builtScriptContents.join('\n');
+assert.match(frontendBundle, /\/ws\/translate/);
+const stylesheet = builtHtml.match(/<link[^>]+href="([^"]+\.css)"[^>]*>/);
+assert.ok(stylesheet, 'Vite build should emit a stylesheet');
+assert.ok(
+    fs.existsSync(path.join(distDir, stylesheet[1].replace(/^\//, ''))),
+    `Built stylesheet is missing: ${stylesheet[1]}`
+);
+const workletAsset = frontendBundle.match(/(?:\.\/)?assets\/audio_capture_processor-[\w-]+\.js/);
+assert.ok(workletAsset, 'Built bundle should reference the emitted audio worklet asset');
+assert.ok(
+    fs.existsSync(path.join(distDir, workletAsset[0].replace(/^\.\//, ''))),
+    `Built audio worklet asset is missing: ${workletAsset[0]}`
+);
 
 console.log('All frontend WebSocket URL configuration tests passed!');
