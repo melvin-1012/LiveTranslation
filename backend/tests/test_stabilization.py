@@ -7,7 +7,10 @@ def orchestrator():
     asr = MockASRService()
     translator = MockTranslationService()
     ws = AsyncMock()
-    return StreamingOrchestrator(asr, translator, ws)
+    instance = StreamingOrchestrator(asr, translator, ws)
+    instance.source_lang = "en"
+    instance.target_lang = "hi"
+    return instance
 
 def test_stabilization_duplicate(orchestrator):
     orchestrator.last_asr_text = "A B C"

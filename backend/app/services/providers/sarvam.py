@@ -114,11 +114,26 @@ class SarvamASRService(ASRService):
                     self.last_result = result
                     await self.result_queue.put(result)
                 elif event == "error":
+                    code = data.get("code", "unknown")
+                    message = data.get("message", "No error message")
+                    status_code = data.get("status_code")
                     logger.error(
-                        "Sarvam ASR error %s: %s",
-                        data.get("code", "unknown"),
-                        data.get("message", "No error message"),
+                        "Sarvam ASR error %s: %s (status=%s)",
+                        code,
+                        message,
+                        status_code,
                     )
+                    is_auth = code in ("invalid_subscription_key", "unauthorized") or status_code == 401
+                    await self.result_queue.put({
+                        "type": "error",
+                        "error_code": "asr_auth_failed" if is_auth else "asr_provider_error",
+                        "error_category": "authentication_error" if is_auth else "provider_error",
+                        "message": f"Sarvam error: {message}",
+                        "is_final": True,
+                    })
+                    if data.get("is_fatal", True):
+                        self.is_connected = False
+                        break
         except Exception as e:
             logger.error(f"Sarvam ASR Receive loop error: {e}")
             self.is_connected = False

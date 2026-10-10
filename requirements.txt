@@ -5,3 +5,4 @@ google-cloud-translate
 python-dotenv
 httpx
 supabase
+requests
