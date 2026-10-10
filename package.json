@@ -1,10 +1,11 @@
+
 {
   "name": "live-indic-translator",
   "version": "1.0.0",
   "description": "Real-time speech translation system for English and Indian languages",
   "scripts": {
     "dev": "vite",
-    "build": "tsc",
+    "build": "tsc && vite build",
     "watch": "tsc --watch"
   },
   "devDependencies": {
