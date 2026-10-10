@@ -2,6 +2,8 @@
 
 Live Indic Translator is a browser application for real-time speech transcription and translation. It captures microphone audio, streams it to a Python WebSocket server, displays recognized speech and translated text, and can persist translation sessions and utterances to Supabase.
 
+[**Open the hosted application**](https://liveindic-translator.onrender.com)
+
 The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. Speakers can select a source language manually or choose **Auto-detect** and select a target language independently.
 
 > **Important:** Auto-detect requires the Sarvam Saaras v4 real-time speech API and a valid `SARVAM_API_KEY`. Mock mode does not recognize real speech. Deepgram is used for supported manually selected source languages and is not sent `language=auto`.
@@ -9,6 +11,7 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 ## Contents
 
 - [Features](#features)
+- [Hosted application](#hosted-application)
 - [System architecture](#system-architecture)
 - [Technology stack and models](#technology-stack-and-models)
 - [Requirements](#requirements)
@@ -31,6 +34,20 @@ The application supports English, Hindi, Tamil, Telugu, Kannada, and Malayalam. 
 - Supabase authentication, saved language preferences, session history, and transcript/translation persistence where credentials, schema, and authorization permit.
 - Guest live sessions when session creation is unavailable; guest sessions are not associated with a signed-in account for history.
 - Mock paths for development and automated tests. Mock ASR does **not** transcribe microphone audio.
+
+## Hosted application
+
+Try the deployed application at [liveindic-translator.onrender.com](https://liveindic-translator.onrender.com). Allow microphone access when prompted. Live speech recognition and translation depend on the deployed backend, valid provider credentials, network connectivity, and provider availability.
+
+The frontend uses `http(s)://<backend-host>:8000` locally by default. For deployment, set `window.LIVE_TRANSLATION_BACKEND_URL` to the backend's public HTTP(S) or WS(S) origin in a script loaded before `ws_translation.js`; the app converts HTTP(S) to WS(S) and connects to `/ws/translate`. An HTTPS frontend requires an HTTPS/WSS backend. For example, place this before the existing `ws_translation.js` script tag in `index.html`:
+
+```html
+<script>
+  window.LIVE_TRANSLATION_BACKEND_URL = "https://your-backend.example.com";
+</script>
+```
+
+Keep `SARVAM_API_KEY` and other provider credentials in the backend's environment only—never in frontend configuration.
 
 ## System architecture
 
